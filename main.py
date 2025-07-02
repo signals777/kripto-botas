@@ -45,8 +45,9 @@ def demo_trade_bot():
                 "pelnas": result,
                 "balansas": round(balance, 2),
                 "procentai": round(result_pct, 2)
-    'laikas': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+
             })
+            'laikas': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
             time.sleep(0.1)  # Demo greitis, realiai intervalas ilgesnis
         time.sleep(settings["interval"] * 60 * 60)  # intervalas valandomis
 
