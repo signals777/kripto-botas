@@ -47,6 +47,7 @@
     <h3>Sandorių istorija (paskutiniai 100):</h3>
     <table>
         <tr>
+            <th>Laikas</th>
             <th>Porą</th>
             <th>Kryptis</th>
             <th>Kaina</th>
@@ -56,6 +57,7 @@
         </tr>
         {% for t in trade_history %}
         <tr>
+            <td>{{ t.laikas }}</td>
             <td>{{ t.pora }}</td>
             <td>{{ t.kryptis }}</td>
             <td>{{ t.kaina }}</td>
