@@ -8,7 +8,7 @@ import random
 
 app = Flask(__name__)
 
-# 50 populiariausių valiutų porų
+# Tavo valiutų poros
 PAIRS = [
     "BTC/USDT", "ETH/USDT", "BNB/USDT", "XRP/USDT", "ADA/USDT", "AVAX/USDT", "DOGE/USDT", "LINK/USDT", "LTC/USDT", "MATIC/USDT",
     "BCH/USDT", "XLM/USDT", "FIL/USDT", "ICP/USDT", "OP/USDT", "HBAR/USDT", "VET/USDT", "GRT/USDT", "AAVE/USDT", "STX/USDT",
@@ -16,13 +16,11 @@ PAIRS = [
     "1INCH/USDT", "BAT/USDT", "CRV/USDT", "CHZ/USDT", "CELO/USDT", "LRC/USDT", "SAND/USDT", "KAVA/USDT", "ALGO/USDT", "ARB/USDT",
     "EOS/USDT", "MKR/USDT", "UNI/USDT", "DOT/USDT"
 ]
-
-# Konvertuoti į Binance formatą
 BINANCE_PAIRS = [p.replace("/", "") for p in PAIRS]
 
 trade_history = []
 balance = 500.0
-settings = {"take_profit": 2.0, "stop_loss": 1.5, "interval": 4.0}  # valandom
+settings = {"take_profit": 2.0, "stop_loss": 1.5, "interval": 4.0}  # 4 val
 
 def get_binance_price(symbol):
     url = f"https://api.binance.com/api/v3/ticker/price?symbol={symbol}"
@@ -41,13 +39,12 @@ def demo_trade_bot():
             symbol = BINANCE_PAIRS[i]
             price = get_binance_price(symbol)
             if price is None:
-                continue  # Praleidžia jei negavo kainos
-
+                continue  # Praleidžiam jei negavom kainos
+            
             direction = random.choice(["PIRKTI", "PARDUOTI"])
             result_pct = random.uniform(-settings["stop_loss"], settings["take_profit"])
             result = round(balance * (result_pct / 100), 2)
             balance += result
-
             trade_history.insert(0, {
                 "laikas": datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
                 "pora": pair,
@@ -57,12 +54,10 @@ def demo_trade_bot():
                 "procentai": round(result_pct, 2),
                 "balansas": round(balance, 2)
             })
-            # Tik paskutiniai 100 įrašų
             if len(trade_history) > 100:
                 trade_history.pop()
-            time.sleep(1)  # kas 1 sek. per porą
+            time.sleep(1)  # Demo, kas 1 sek porai
 
-        # Po visų porų – laukiam nurodytą intervalą (val.)
         time.sleep(settings["interval"] * 60 * 60)
 
 @app.route("/")
@@ -78,4 +73,5 @@ if __name__ == "__main__":
     t = threading.Thread(target=demo_trade_bot)
     t.daemon = True
     t.start()
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 8000)))
+    port = int(os.environ.get("PORT", 8000))
+    app.run(host="0.0.0.0", port=port)
