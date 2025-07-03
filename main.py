@@ -8,19 +8,19 @@ import random
 
 app = Flask(__name__)
 
-# Tavo valiutų poros
 PAIRS = [
     "BTC/USDT", "ETH/USDT", "BNB/USDT", "XRP/USDT", "ADA/USDT", "AVAX/USDT", "DOGE/USDT", "LINK/USDT", "LTC/USDT", "MATIC/USDT",
     "BCH/USDT", "XLM/USDT", "FIL/USDT", "ICP/USDT", "OP/USDT", "HBAR/USDT", "VET/USDT", "GRT/USDT", "AAVE/USDT", "STX/USDT",
     "QNT/USDT", "NEAR/USDT", "IMX/USDT", "SNX/USDT", "RUNE/USDT", "DYDX/USDT", "GALA/USDT", "MANA/USDT", "FTM/USDT", "ENJ/USDT",
     "1INCH/USDT", "BAT/USDT", "CRV/USDT", "CHZ/USDT", "CELO/USDT", "LRC/USDT", "SAND/USDT", "KAVA/USDT", "ALGO/USDT", "ARB/USDT",
-    "EOS/USDT", "MKR/USDT", "UNI/USDT", "DOT/USDT"
+    "EOS/USDT", "MKR/USDT", "UNI/USDT", "DOT/USDT", "KNC/USDT", "SHIB/USDT", "QKC/USDT", "XAUT/USDT", "TIA/USDT", "YFI/USDT"
 ]
+
 BINANCE_PAIRS = [p.replace("/", "") for p in PAIRS]
 
 trade_history = []
 balance = 500.0
-settings = {"take_profit": 2.0, "stop_loss": 1.5, "interval": 4.0}  # 4 val
+settings = {"take_profit": 2.0, "stop_loss": 1.5, "interval": 0.001}  # 0.001 val. = ~4 sek. demo
 
 def get_binance_price(symbol):
     url = f"https://api.binance.com/api/v3/ticker/price?symbol={symbol}"
@@ -29,7 +29,7 @@ def get_binance_price(symbol):
         data = response.json()
         return float(data['price'])
     except Exception as e:
-        print(f"Klaida gaunant {symbol} kainą:", e)
+        print(f"Error getting price: {e}")
         return None
 
 def demo_trade_bot():
@@ -39,8 +39,7 @@ def demo_trade_bot():
             symbol = BINANCE_PAIRS[i]
             price = get_binance_price(symbol)
             if price is None:
-                continue  # Praleidžiam jei negavom kainos
-            
+                continue
             direction = random.choice(["PIRKTI", "PARDUOTI"])
             result_pct = random.uniform(-settings["stop_loss"], settings["take_profit"])
             result = round(balance * (result_pct / 100), 2)
@@ -54,11 +53,11 @@ def demo_trade_bot():
                 "procentai": round(result_pct, 2),
                 "balansas": round(balance, 2)
             })
-            if len(trade_history) > 100:
+            if len(trade_history) > 200:
                 trade_history.pop()
-            time.sleep(1)  # Demo, kas 1 sek porai
+            time.sleep(1)  # demo: kas 1s sandoris
 
-        time.sleep(settings["interval"] * 60 * 60)
+        time.sleep(settings["interval"] * 60 * 60)  # demo: labai trumpas
 
 @app.route("/")
 def index():
