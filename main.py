@@ -1,4 +1,5 @@
-from flask import Flask, render_template, request, redirect, url_for
+import requests
+from flask import Flask, render_template
 from datetime import datetime
 import threading
 import time
@@ -6,93 +7,79 @@ import random
 
 app = Flask(__name__)
 
-# 50 populiariausių kriptovaliutų porų (pavyzdžiai, galima papildyti)
+# Tavo valiutų poros
 PAIRS = [
-    "BTC/USDT", "ETH/USDT", "BNB/USDT", "XRP/USDT", "SOL/USDT",
-    "ADA/USDT", "AVAX/USDT", "DOGE/USDT", "SHIB/USDT", "TRX/USDT",
-    "LINK/USDT", "LTC/USDT", "MATIC/USDT", "DOT/USDT", "UNI/USDT",
-    "BCH/USDT", "XLM/USDT", "FIL/USDT", "ETC/USDT", "APT/USDT",
-    "ICP/USDT", "OP/USDT", "HBAR/USDT", "VET/USDT", "SUI/USDT",
-    "GRT/USDT", "AAVE/USDT", "STX/USDT", "MKR/USDT", "EOS/USDT",
-    "QNT/USDT", "NEAR/USDT", "IMX/USDT", "ARB/USDT", "ALGO/USDT",
-    "SNX/USDT", "RUNE/USDT", "DYDX/USDT", "KAVA/USDT", "SAND/USDT",
-    "GALA/USDT", "MANA/USDT", "FTM/USDT", "CHZ/USDT", "CRV/USDT",
-    "ENJ/USDT", "1INCH/USDT", "BAT/USDT", "CELO/USDT", "LRC/USDT"
+    "BTC/USDT", "ETH/USDT", "BNB/USDT", "XRP/USDT", "ADA/USDT", "AVAX/USDT", "DOGE/USDT", "LINK/USDT", "LTC/USDT", "MATIC/USDT",
+    "BCH/USDT", "XLM/USDT", "FIL/USDT", "ICP/USDT", "OP/USDT", "HBAR/USDT", "VET/USDT", "GRT/USDT", "AAVE/USDT", "STX/USDT",
+    "QNT/USDT", "NEAR/USDT", "IMX/USDT", "SNX/USDT", "RUNE/USDT", "DYDX/USDT", "GALA/USDT", "MANA/USDT", "FTM/USDT", "ENJ/USDT",
+    "1INCH/USDT", "BAT/USDT", "CRV/USDT", "CHZ/USDT", "CELO/USDT", "LRC/USDT", "SAND/USDT", "KAVA/USDT", "ALGO/USDT", "ARB/USDT",
+    "EOS/USDT", "MKR/USDT", "UNI/USDT", "DOT/USDT", "SHIB/USDT", "SOL/USDT", "XTZ/USDT", "ALN/USDT", "MNT/USDT", "XAUT/USDT"
 ]
 
-bot_running = False
-bot_thread = None
+# Automatinė konversija į Binance formatą (be "/")
+BINANCE_PAIRS = [p.replace("/", "") for p in PAIRS]
 
-# Demo sandorių istorija ir nustatymai
 trade_history = []
-balance = 500.0  # Pradinis demo balansas
-settings = {"take_profit": 2.0, "stop_loss": 1.5, "interval": 8}
+balance = 500.0  # Pradinis balansas
+settings = {
+    "take_profit": 2.0,   # Max. pelnas (procentais) sandoriui demo
+    "stop_loss": 1.5,     # Max. nuostolis (procentais) sandoriui demo
+    "interval": 4.0       # Simuliuojamas sandorio intervalas (valandomis)
+}
+
+def get_binance_price(symbol):
+    url = f"https://api.binance.com/api/v3/ticker/price?symbol={symbol}"
+    try:
+        response = requests.get(url, timeout=5)
+        data = response.json()
+        return float(data['price'])
+    except Exception as e:
+        print(f"Klaida gaunant {symbol} kainą:", e)
+        return None
 
 def demo_trade_bot():
-    global bot_running, balance
-    while bot_running:
-        for pair in PAIRS:
-            # DEMO: "atsitiktinis" pelnas/nuostolis
+    global balance
+    while True:
+        for i, pair in enumerate(PAIRS):
+            symbol = BINANCE_PAIRS[i]
+            price = get_binance_price(symbol)
+            if price is None:
+                continue  # Praleisti jei negauta kaina
+
             direction = random.choice(["PIRKTI", "PARDUOTI"])
-            price = round(random.uniform(0.5, 2.5), 3)
+            # Demo: pelnas/nuostolis generuojamas pagal intervalą
             result_pct = random.uniform(-settings["stop_loss"], settings["take_profit"])
             result = round(balance * (result_pct / 100), 2)
             balance += result
-            trade_history.append({
+
+            trade_history.insert(0, {
+                "laikas": datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
                 "pora": pair,
                 "kryptis": direction,
                 "kaina": price,
                 "pelnas": result,
-                "balansas": round(balance, 2),
                 "procentai": round(result_pct, 2),
-                "laikas": datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                "balansas": round(balance, 2)
             })
-            
-            time.sleep(0.1)  # Demo greitis, realiai intervalas ilgesnis
-        time.sleep(settings["interval"] * 60 * 60)  # intervalas valandomis
+            # Tik paskutiniai 100 įrašų
+            if len(trade_history) > 100:
+                trade_history.pop()
+            time.sleep(1)  # Demo: 1 sek. tarp porų
 
-@app.route("/", methods=["GET", "POST"])
+        # Po visų porų, laukiam intervalą (tarkim, 4 val.)
+        time.sleep(settings["interval"] * 60 * 60)
+
+@app.route("/")
 def index():
-    global bot_running
-    msg = ""
-    if request.method == "POST":
-        if "start" in request.form:
-            if not bot_running:
-                start_bot()
-                msg = "Botas paleistas!"
-            else:
-                msg = "Botas jau veikia."
-        elif "stop" in request.form:
-            stop_bot()
-            msg = "Botas sustabdytas!"
-        elif "update" in request.form:
-            try:
-                tp = float(request.form.get("take_profit", 2.0))
-                sl = float(request.form.get("stop_loss", 1.5))
-                iv = float(request.form.get("interval", 8))
-                settings["take_profit"] = tp
-                settings["stop_loss"] = sl
-                settings["interval"] = iv
-                msg = "Nustatymai atnaujinti!"
-            except Exception:
-                msg = "Klaida atnaujinant nustatymus."
     return render_template("index.html",
-                           bot_running=bot_running,
-                           balance=balance,
-                           trade_history=trade_history[-100:][::-1],
-                           settings=settings,
-                           msg=msg)
-
-def start_bot():
-    global bot_running, bot_thread
-    if not bot_running:
-        bot_running = True
-        bot_thread = threading.Thread(target=demo_trade_bot)
-        bot_thread.start()
-
-def stop_bot():
-    global bot_running
-    bot_running = False
+        trade_history=trade_history,
+        demo_balance=balance,
+        settings=settings,
+        bot_status="VEIKIA"
+    )
 
 if __name__ == "__main__":
+    t = threading.Thread(target=demo_trade_bot)
+    t.daemon = True
+    t.start()
     app.run(host="0.0.0.0", port=8000)
