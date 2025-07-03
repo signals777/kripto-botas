@@ -8,25 +8,21 @@ import random
 
 app = Flask(__name__)
 
-# Tavo valiutų poros
+# 50 populiariausių valiutų porų
 PAIRS = [
     "BTC/USDT", "ETH/USDT", "BNB/USDT", "XRP/USDT", "ADA/USDT", "AVAX/USDT", "DOGE/USDT", "LINK/USDT", "LTC/USDT", "MATIC/USDT",
     "BCH/USDT", "XLM/USDT", "FIL/USDT", "ICP/USDT", "OP/USDT", "HBAR/USDT", "VET/USDT", "GRT/USDT", "AAVE/USDT", "STX/USDT",
     "QNT/USDT", "NEAR/USDT", "IMX/USDT", "SNX/USDT", "RUNE/USDT", "DYDX/USDT", "GALA/USDT", "MANA/USDT", "FTM/USDT", "ENJ/USDT",
     "1INCH/USDT", "BAT/USDT", "CRV/USDT", "CHZ/USDT", "CELO/USDT", "LRC/USDT", "SAND/USDT", "KAVA/USDT", "ALGO/USDT", "ARB/USDT",
-    "EOS/USDT", "MKR/USDT", "UNI/USDT", "DOT/USDT", "SHIB/USDT", "SOL/USDT", "XTZ/USDT", "ALN/USDT", "MNT/USDT", "XAUT/USDT"
+    "EOS/USDT", "MKR/USDT", "UNI/USDT", "DOT/USDT"
 ]
 
-# Automatinė konversija į Binance formatą (be "/")
+# Konvertuoti į Binance formatą
 BINANCE_PAIRS = [p.replace("/", "") for p in PAIRS]
 
 trade_history = []
-balance = 500.0  # Pradinis balansas
-settings = {
-    "take_profit": 2.0,   # Max. pelnas (procentais) sandoriui demo
-    "stop_loss": 1.5,     # Max. nuostolis (procentais) sandoriui demo
-    "interval": 4.0       # Simuliuojamas sandorio intervalas (valandomis)
-}
+balance = 500.0
+settings = {"take_profit": 2.0, "stop_loss": 1.5, "interval": 4.0}  # valandom
 
 def get_binance_price(symbol):
     url = f"https://api.binance.com/api/v3/ticker/price?symbol={symbol}"
@@ -45,10 +41,9 @@ def demo_trade_bot():
             symbol = BINANCE_PAIRS[i]
             price = get_binance_price(symbol)
             if price is None:
-                continue  # Praleisti jei negauta kaina
+                continue  # Praleidžia jei negavo kainos
 
             direction = random.choice(["PIRKTI", "PARDUOTI"])
-            # Demo: pelnas/nuostolis generuojamas pagal intervalą
             result_pct = random.uniform(-settings["stop_loss"], settings["take_profit"])
             result = round(balance * (result_pct / 100), 2)
             balance += result
@@ -65,9 +60,9 @@ def demo_trade_bot():
             # Tik paskutiniai 100 įrašų
             if len(trade_history) > 100:
                 trade_history.pop()
-            time.sleep(1)  # Demo: 1 sek. tarp porų
+            time.sleep(1)  # kas 1 sek. per porą
 
-        # Po visų porų, laukiam intervalą (tarkim, 4 val.)
+        # Po visų porų – laukiam nurodytą intervalą (val.)
         time.sleep(settings["interval"] * 60 * 60)
 
 @app.route("/")
