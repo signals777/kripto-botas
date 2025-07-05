@@ -1,5 +1,5 @@
 import requests
-from flask import Flask, render_template, redirect, url_for
+from flask import Flask, render_template, request, redirect, url_for
 from datetime import datetime
 import threading
 import time
@@ -7,31 +7,32 @@ import random
 
 app = Flask(__name__)
 
-# 50 kripto valiutų porų
-PAIRS = [
-    "BTC/USDT", "ETH/USDT", "BNB/USDT", "SOL/USDT", "ADA/USDT", "XRP/USDT",
-    "DOGE/USDT", "TON/USDT", "TRX/USDT", "AVAX/USDT", "LINK/USDT", "DOT/USDT",
-    "MATIC/USDT", "WBTC/USDT", "SHIB/USDT", "LTC/USDT", "BCH/USDT", "ICP/USDT",
-    "NEAR/USDT", "UNI/USDT", "DAI/USDT", "STETH/USDT", "APT/USDT", "FIL/USDT",
-    "PEPE/USDT", "RNDR/USDT", "ETC/USDT", "OKB/USDT", "TAO/USDT", "FDUSD/USDT",
-    "LEO/USDT", "TIA/USDT", "CRO/USDT", "IMX/USDT", "INJ/USDT", "STX/USDT",
-    "ARB/USDT", "MKR/USDT", "OP/USDT", "VET/USDT", "SUI/USDT", "GRT/USDT",
-    "LDO/USDT", "QNT/USDT", "AAVE/USDT", "THETA/USDT", "XLM/USDT", "FLOW/USDT",
-    "AXS/USDT", "SNX/USDT"
-]
-
-BINANCE_PAIRS = [p.replace("/", "") for p in PAIRS]
-
-trade_history = []
-balance = 500.0
-
+# Parametrai
 settings = {
-    "take_profit": 2.0,    # TP %
-    "stop_loss": 1.5,      # SL %
-    "interval": 8.0        # kas kiek valandų ciklas (8 val)
+    "take_profit": 2.0,
+    "stop_loss": 1.5,
+    "interval": 8,        # valandos (pvz., 1-12)
+    "pair_count": 100     # kiek valiutų analizuoti (50–100)
 }
 
+PAIRS = []
+BINANCE_PAIRS = []
+trade_history = []
+balance = 500.0
 bot_running = True  # start/stop
+
+def get_top_pairs(limit=100):
+    url = "https://api.binance.com/api/v3/ticker/24hr"
+    data = requests.get(url, timeout=10).json()
+    usdt_pairs = [d for d in data if d["symbol"].endswith("USDT")]
+    sorted_pairs = sorted(usdt_pairs, key=lambda d: float(d["quoteVolume"]), reverse=True)
+    top = sorted_pairs[:limit]
+    return [p["symbol"][:-4] + "/USDT" for p in top]
+
+def update_pairs():
+    global PAIRS, BINANCE_PAIRS
+    PAIRS = get_top_pairs(settings["pair_count"])
+    BINANCE_PAIRS = [p.replace("/", "") for p in PAIRS]
 
 def get_binance_price(symbol):
     url = f"https://api.binance.com/api/v3/ticker/price?symbol={symbol}"
@@ -47,6 +48,7 @@ def demo_trade_bot():
     global balance, trade_history, bot_running
     while True:
         if bot_running:
+            update_pairs()
             for i, pair in enumerate(PAIRS):
                 symbol = BINANCE_PAIRS[i]
                 price = get_binance_price(symbol)
@@ -54,7 +56,6 @@ def demo_trade_bot():
                     continue
 
                 direction = random.choice(["PIRKTI", "PARDUOTI"])
-                # Pelnas random, bet realios ribos pagal TP/SL
                 result_pct = random.uniform(-settings["stop_loss"], settings["take_profit"])
                 profit = round(balance * (result_pct / 100), 2)
                 balance += profit
@@ -70,28 +71,36 @@ def demo_trade_bot():
                 })
                 if len(trade_history) > 200:
                     trade_history.pop()
-                time.sleep(0.5)  # demo greitis, kad panelėje būtų gyvumo
+                time.sleep(0.2)  # demo greitis, galima didinti
 
-            # po visų porų laukti iki kito ciklo (pvz. 8 val. realybėj)
             time.sleep(settings["interval"] * 60 * 60)
         else:
             time.sleep(2)
 
-@app.route("/")
+@app.route("/", methods=["GET"])
 def index():
     return render_template(
         "index.html",
         trade_history=trade_history,
         demo_balance=balance,
         settings=settings,
-        bot_status="Veikia" if bot_running else "Stabdyta"
+        bot_status="Veikia" if bot_running else "Stabdyta",
+        pairs=PAIRS
     )
+
+@app.route("/update_settings", methods=["POST"])
+def update_settings():
+    interval = int(request.form.get("interval", 8))
+    pair_count = int(request.form.get("pair_count", 100))
+    settings["interval"] = min(max(interval, 1), 12)
+    settings["pair_count"] = min(max(pair_count, 50), 100)
+    return redirect(url_for("index"))
 
 @app.route("/stop")
 def stop_bot():
     global bot_running
     bot_running = False
-    return redirect(url_for("index"))
+    return redirect(url_for("index"))       
 
 @app.route("/start")
 def start_bot():
@@ -101,7 +110,6 @@ def start_bot():
 
 @app.route("/refresh")
 def refresh():
-    # Paprastas atnaujinimas be meta refresh
     return redirect(url_for("index"))
 
 if __name__ == "__main__":
