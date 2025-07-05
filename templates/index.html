@@ -1,38 +1,51 @@
 <!DOCTYPE html>
-<html>
+<html lang="lt">
 <head>
-    <title>Demo Kripto Botas</title>
+    <meta charset="UTF-8">
+    <title>Kripto Demo Panelė</title>
+    <meta http-equiv="refresh" content="30"> <!-- kas 30 s auto atnaujinimas -->
     <style>
-        body { font-family: Arial; background: #181826; color: #eee; }
+        body { font-family: Arial, sans-serif; margin: 24px; }
         table { border-collapse: collapse; width: 100%; }
-        th, td { border: 1px solid #555; padding: 4px 8px; }
-        th { background: #23233a; }
+        th, td { border: 1px solid #999; padding: 6px 10px; text-align: center; }
+        th { background: #eee; }
     </style>
 </head>
 <body>
-    <h1>Demo Kripto Botas</h1>
-    <p>BALANSAS: <b>{{ demo_balance }}</b> USDT</p>
-    <p>Statusas: {{ bot_status }}</p>
-    <h2>Sandorių istorija</h2>
+    <h2>Kripto bot demo panelė</h2>
+    <p><b>Balansas:</b> {{ demo_balance }} USDT</p>
+    <p>
+        <b>Take-Profit:</b> {{ settings.take_profit }}% |
+        <b>Stop-Loss:</b> {{ settings.stop_loss }}% |
+        <b>Ciklo intervalas:</b> kas {{ settings.interval }} val.
+    </p>
+    <p>
+        <b>Bot statusas:</b> <span style="color: {% if bot_status=='Veikia' %}green{% else %}red{% endif %};">{{ bot_status }}</span>
+    </p>
+    <p>
+        <a href="/start">START</a> |
+        <a href="/stop">STOP</a> |
+        <a href="/refresh">Atnaujinti ranka</a>
+    </p>
     <table>
         <tr>
             <th>Laikas</th>
-            <th>Pora</th>
+            <th>Porą</th>
             <th>Kryptis</th>
             <th>Kaina</th>
-            <th>Pelnas</th>
-            <th>%</th>
+            <th>Pelnas (USDT)</th>
+            <th>Pelnas (%)</th>
             <th>Balansas</th>
         </tr>
-        {% for trade in trade_history %}
+        {% for t in trade_history %}
         <tr>
-            <td>{{ trade.laikas }}</td>
-            <td>{{ trade.pora }}</td>
-            <td>{{ trade.kryptis }}</td>
-            <td>{{ trade.kaina }}</td>
-            <td>{{ trade.pelnas }}</td>
-            <td>{{ trade.procentai }}</td>
-            <td>{{ trade.balansas }}</td>
+            <td>{{ t.laikas }}</td>
+            <td>{{ t.pora }}</td>
+            <td>{{ t.kryptis }}</td>
+            <td>{{ t.kaina }}</td>
+            <td>{{ t.pelnas }}</td>
+            <td>{{ t.procentai }}</td>
+            <td>{{ t.balansas }}</td>
         </tr>
         {% endfor %}
     </table>
