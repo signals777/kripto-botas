@@ -8,123 +8,152 @@ from collections import deque
 
 app = Flask(__name__)
 
-# TOP 100 kripto valiutų porų (gali keisti kiekį panelėje)
-PAIRS = [
-    "BTC/USDT", "ETH/USDT", "BNB/USDT", "SOL/USDT", "ADA/USDT", "XRP/USDT", "DOGE/USDT", "TON/USDT", "TRX/USDT",
-    "AVAX/USDT", "LINK/USDT", "DOT/USDT", "MATIC/USDT", "WBTC/USDT", "SHIB/USDT", "LTC/USDT", "BCH/USDT", "ICP/USDT",
-    "NEAR/USDT", "UNI/USDT", "DAI/USDT", "STETH/USDT", "APT/USDT", "FIL/USDT", "PEPE/USDT", "RNDR/USDT", "ETC/USDT",
-    "OKB/USDT", "TAO/USDT", "FDUSD/USDT", "LEO/USDT", "TIA/USDT", "CRO/USDT", "IMX/USDT", "INJ/USDT", "STX/USDT",
-    "ARB/USDT", "MKR/USDT", "OP/USDT", "VET/USDT", "SUI/USDT", "GRT/USDT", "LDO/USDT", "QNT/USDT", "AAVE/USDT",
-    "THETA/USDT", "XLM/USDT", "FLOW/USDT", "AXS/USDT", "SNX/USDT", "KAVA/USDT", "MNT/USDT", "XAUT/USDT", "TIA/USDT",
-    "YFI/USDT", "KNC/USDT", "DOGE/USDT", "VET/USDT", "SHIBA/USDT", "QNT/USDT", "LINK/USDT", "ETC/USDT", "ALGO/USDT",
-    "ARBUSDT", "MATIC/USDT", "SAND/USDT", "EOS/USDT", "MKR/USDT", "UNI/USDT", "AVAX/USDT", "FTM/USDT", "GALA/USDT",
-    "ENJ/USDT", "1INCH/USDT", "BAT/USDT", "CRV/USDT", "CHZ/USDT", "FTM/USDT", "MANA/USDT", "GALA/USDT", "ENJ/USDT",
-    "1INCH/USDT", "BAT/USDT", "CELO/USDT", "LRC/USDT", "KAVA/USDT", "ALGO/USDT", "ARB/USDT", "EOS/USDT"
-]
+# -- PARAMETRAI --
+FEE = 0.001   # 0.1% Binance komisinis
+MAX_TRADES = 200  # Istorijos įrašų kiekis
 
-BINANCE_PAIRS = [p.replace("/", "") for p in PAIRS]
+# -- Funkcija top100 kriptų paėmimui iš Binance (pagal likvidumą) --
+def get_top_pairs(n=100):
+    url = "https://api.binance.com/api/v3/ticker/24hr"
+    r = requests.get(url, timeout=10)
+    tickers = r.json()
+    # Tik USDT poros, rikiuojam pagal apyvartą (quoteVolume)
+    pairs = [t for t in tickers if t['symbol'].endswith("USDT") and not t['symbol'].endswith("BUSD")]
+    pairs.sort(key=lambda x: float(x['quoteVolume']), reverse=True)
+    return [t['symbol'] for t in pairs[:n]]
 
-# Parametrai, kuriuos galima keisti panelėje
+# Išsaugom pagrindines poras (pradžioje paimamos)
+BINANCE_PAIRS = get_top_pairs(100)
+
+# -- TA indikatoriai --
+def ema(prices, n):
+    if len(prices) < n: return sum(prices) / len(prices)
+    k = 2 / (n + 1)
+    ema_prev = prices[0]
+    for price in prices:
+        ema_prev = price * k + ema_prev * (1 - k)
+    return ema_prev
+
+def macd(prices):
+    if len(prices) < 26: return 0
+    ema12 = ema(prices[-12:], 12)
+    ema26 = ema(prices[-26:], 26)
+    return ema12 - ema26
+
+def bb(prices):
+    if len(prices) < 20: return (0, 0)
+    sma = sum(prices[-20:]) / 20
+    std = (sum([(p - sma) ** 2 for p in prices[-20:]]) / 20) ** 0.5
+    return (sma + 2 * std, sma - 2 * std)  # upper, lower
+
+def rsi(prices, period=14):
+    if len(prices) < period + 1: return 50
+    gains = [max(prices[i+1]-prices[i], 0) for i in range(-period-1, -1)]
+    losses = [abs(min(prices[i+1]-prices[i], 0)) for i in range(-period-1, -1)]
+    avg_gain = sum(gains) / period
+    avg_loss = sum(losses) / period if sum(losses) > 0 else 0.0001
+    rs = avg_gain / avg_loss
+    return 100 - (100 / (1 + rs))
+
+# -- AI (TA) Filtrų sąrašas --
+TA_FILTERS = ["EMA", "MACD", "BB", "RSI"]
+
+# -- GLOBALS --
 settings = {
-    "take_profit": 2.0,
-    "stop_loss": 1.5,
-    "interval": 8,        # valandų, default 8
-    "n_pairs": 50         # kiek valiutų analizuoti
+    "interval": 8,         # val
+    "n_pairs": 50,         # kiek valiutų analizuoti
+    "ta_filters": ["EMA"], # aktyvūs AI filtrai
 }
-
 trade_history = []
 balance = 500.0
 bot_running = True
+price_history = {symbol: deque(maxlen=40) for symbol in BINANCE_PAIRS}
 
-# Kainų istorija AI analizei
-price_history = {symbol: deque(maxlen=25) for symbol in BINANCE_PAIRS}
-
+# -- Binance kainų paėmimas --
 def get_binance_price(symbol):
     url = f"https://api.binance.com/api/v3/ticker/price?symbol={symbol}"
     try:
         response = requests.get(url, timeout=5)
         data = response.json()
         return float(data['price'])
-    except:
+    except Exception:
         return None
 
-def ema(prices, n):
-    if len(prices) < n:
-        return sum(prices) / len(prices)
-    k = 2 / (n + 1)
-    ema_prev = prices[0]
-    for price in prices:
-        ema_prev = (price * k) + (ema_prev * (1 - k))
-    return ema_prev
-
-def ai_decision(prices):
-    # EMA5/EMA20 crossover signalas
-    if len(prices) < 20:
-        return None
-    short = ema(list(prices)[-5:], 5)
-    long = ema(list(prices)[-20:], 20)
-    if short > long:
+# -- AI sprendimas (grąžina signalą) --
+def ai_decision(prices, active_filters):
+    signals = []
+    # EMA crossover
+    if "EMA" in active_filters and len(prices) >= 20:
+        if ema(prices[-5:], 5) > ema(prices[-20:], 20): signals.append("PIRKTI")
+        if ema(prices[-5:], 5) < ema(prices[-20:], 20): signals.append("PARDUOTI")
+    # MACD
+    if "MACD" in active_filters and len(prices) >= 26:
+        if macd(prices) > 0: signals.append("PIRKTI")
+        if macd(prices) < 0: signals.append("PARDUOTI")
+    # Bollinger Bands
+    if "BB" in active_filters and len(prices) >= 20:
+        upper, lower = bb(prices)
+        if prices[-1] > upper: signals.append("PARDUOTI")
+        if prices[-1] < lower: signals.append("PIRKTI")
+    # RSI
+    if "RSI" in active_filters and len(prices) >= 15:
+        r = rsi(prices)
+        if r < 30: signals.append("PIRKTI")
+        if r > 70: signals.append("PARDUOTI")
+    if signals.count("PIRKTI") > signals.count("PARDUOTI") and signals:
         return "PIRKTI"
-    elif short < long:
+    if signals.count("PARDUOTI") > signals.count("PIRKTI") and signals:
         return "PARDUOTI"
-    else:
-        return None
+    return None
 
+# -- DEMO AI BOTAS --
 def ai_demo_bot():
-    global balance, trade_history, bot_running
+    global balance, trade_history, bot_running, price_history, BINANCE_PAIRS
     while True:
         if bot_running:
-            # Kiek valiutų naudoti (naudotojo pasirinkimas)
-            n = int(settings["n_pairs"])
-            for i, pair in enumerate(PAIRS[:n]):
-                symbol = BINANCE_PAIRS[i]
+            pairs_to_check = BINANCE_PAIRS[:settings["n_pairs"]]
+            for symbol in pairs_to_check:
                 price = get_binance_price(symbol)
-                if price is None:
-                    continue
-                # Pildom kainų istoriją AI analizei
+                if price is None: continue
                 price_history[symbol].append(price)
-                signal = ai_decision(price_history[symbol])
-                if not signal:
-                    continue  # Jei nėra aiškaus signalo, praleidžiam
-
-                # Simuliuojam sandorio pelną iki kito ciklo (demo logika)
-                pct = random.uniform(-settings["stop_loss"], settings["take_profit"])
-                if signal == "PIRKTI":
-                    result = round(balance * (pct / 100), 2)
-                else:
-                    result = round(-balance * (pct / 100), 2)
-                balance += result
+                signal = ai_decision(list(price_history[symbol]), settings["ta_filters"])
+                if not signal: continue
+                pct = random.uniform(-1.5, 2.0)
+                gross = balance * (pct/100)
+                fee_paid = abs(balance * FEE)
+                net_profit = gross - fee_paid
+                balance += net_profit
 
                 trade_history.insert(0, {
                     "laikas": datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-                    "pora": pair,
+                    "pora": symbol,
                     "kryptis": signal,
                     "kaina": price,
-                    "pelnas": result,
+                    "pelnas": round(net_profit, 2),
                     "procentai": round(pct, 2),
-                    "balansas": round(balance, 2)
+                    "komisinis": round(fee_paid, 2),
+                    "balansas": round(balance, 2),
                 })
-                if len(trade_history) > 200:
+                if len(trade_history) > MAX_TRADES:
                     trade_history.pop()
-                time.sleep(0.2)  # demo greitis
-
-            # Laukti iki kito ciklo
+                time.sleep(0.25)
             time.sleep(int(settings["interval"]) * 60 * 60)
         else:
             time.sleep(2)
 
+# -- PANELĖS RODINYS --
 @app.route("/", methods=["GET", "POST"])
 def index():
-    global settings
+    global settings, BINANCE_PAIRS
     if request.method == "POST":
-        # Atnaujinti nustatymus iš panelės
         try:
             settings["interval"] = int(request.form.get("interval", 8))
             settings["n_pairs"] = int(request.form.get("n_pairs", 50))
-        except Exception as e:
-            pass
+            filters = request.form.getlist("ta_filters")
+            settings["ta_filters"] = filters if filters else ["EMA"]
+        except Exception: pass
         return redirect(url_for("index"))
-    # Sugeneruoti balanso grafikui
+    # Balanso grafikas
     graph = [float(t["balansas"]) for t in reversed(trade_history[-100:])]
     times = [t["laikas"] for t in reversed(trade_history[-100:])]
     return render_template(
@@ -134,7 +163,9 @@ def index():
         settings=settings,
         bot_status="Veikia" if bot_running else "Stabdyta",
         graph=graph,
-        times=times
+        times=times,
+        all_filters=TA_FILTERS,
+        all_pairs=BINANCE_PAIRS
     )
 
 @app.route("/stop")
@@ -149,8 +180,11 @@ def start_bot():
     bot_running = True
     return redirect(url_for("index"))
 
-@app.route("/refresh")
-def refresh():
+@app.route("/refresh_pairs")
+def refresh_pairs():
+    global BINANCE_PAIRS, price_history
+    BINANCE_PAIRS = get_top_pairs(100)
+    price_history = {symbol: deque(maxlen=40) for symbol in BINANCE_PAIRS}
     return redirect(url_for("index"))
 
 if __name__ == "__main__":
