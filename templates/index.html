@@ -1,103 +1,79 @@
 <!DOCTYPE html>
-<html lang="lt">
+<html>
 <head>
-    <meta charset="UTF-8">
     <title>AI Kripto Demo Panelė</title>
-    <meta http-equiv="refresh" content="60">
+    <meta http-equiv="refresh" content="120">
     <style>
-        body { font-family: Arial, sans-serif; background: #171B26; color: #fff; }
-        .container { max-width: 1100px; margin: 40px auto; background: #232a3a; padding: 24px; border-radius: 10px; box-shadow: 0 6px 36px #111; }
-        h1 { color: #40fa93; text-align: center;}
-        .balansas { font-size: 1.7em; color: #ffd800; text-align:center; margin-bottom:18px;}
-        .statusas { color: #32e3a5; font-weight: bold; text-align: center;}
-        .panel-controls { margin: 18px 0 24px 0; text-align: center;}
-        label, select, input { margin: 0 8px 0 0; }
-        .start, .stop, .refresh {
-            margin: 0 10px; padding: 9px 20px; border-radius: 5px; border: none;
-            font-weight: bold; cursor:pointer;
-        }
-        .start { background: #1ee83e; color: #fff;}
-        .stop { background: #ff2727; color: #fff;}
-        .refresh { background: #2242b8; color: #fff;}
-        table { width: 100%; margin-top: 30px; border-collapse: collapse; }
-        th, td { border-bottom: 1px solid #444; padding: 7px 5px; text-align: center;}
-        th { background: #222; color: #40fa93; font-size: 1.1em;}
-        tr:hover { background: #212b3b;}
-        .grafikas {margin:40px 0;}
+        body { font-family: Arial, sans-serif; }
+        table { width: 100%; border-collapse: collapse; margin-bottom: 20px;}
+        th, td { border: 1px solid #ccc; padding: 6px; text-align: center;}
+        th { background: #f4f4f4;}
+        .form-section { margin: 20px 0; }
     </style>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 </head>
 <body>
-<div class="container">
-    <h1>AI Kripto Demo Panelė</h1>
-    <div class="balansas">Balansas: <b>{{ demo_balance }} USDT</b></div>
-    <div class="statusas">Botas: <b>{{ bot_status }}</b></div>
-
-    <form method="post" class="panel-controls">
-        <label>Ciklo trukmė (val.):</label>
-        <select name="interval">
-            {% for v in [1,2,4,8,12] %}
-                <option value="{{ v }}" {% if v == settings["interval"] %}selected{% endif %}>{{ v }}</option>
-            {% endfor %}
-        </select>
-        <label>Valiutų kiekis:</label>
-        <select name="n_pairs">
-            {% for n in [20, 50, 70, 80, 100] %}
-                <option value="{{ n }}" {% if n == settings["n_pairs"] %}selected{% endif %}>{{ n }}</option>
-            {% endfor %}
-        </select>
-        <button class="refresh" type="submit">Nustatyti</button>
-        <a class="start" href="/start">Paleisti</a>
-        <a class="stop" href="/stop">Stabdyti</a>
-        <a class="refresh" href="/refresh">Atnaujinti</a>
-    </form>
-
-    <div class="grafikas">
-        <canvas id="balansas_chart" width="960" height="240"></canvas>
-    </div>
-
-    <table>
-        <tr>
-            <th>Laikas</th>
-            <th>Pora</th>
-            <th>Kryptis</th>
-            <th>Kaina</th>
-            <th>Pelnas (USDT)</th>
-            <th>Pelnas (%)</th>
-            <th>Balansas</th>
-        </tr>
-        {% for t in trade_history[:60] %}
-        <tr>
-            <td>{{ t.laikas }}</td>
-            <td>{{ t.pora }}</td>
-            <td>{{ t.kryptis }}</td>
-            <td>{{ "%.4f"|format(t.kaina) }}</td>
-            <td>{% if t.pelnas > 0 %}<span style="color:#24ff54">{{ t.pelnas }}</span>{% else %}<span style="color:#ff5252">{{ t.pelnas }}</span>{% endif %}</td>
-            <td>{% if t.procentai > 0 %}<span style="color:#24ff54">{{ t.procentai }}</span>{% else %}<span style="color:#ff5252">{{ t.procentai }}</span>{% endif %}</td>
-            <td>{{ t.balansas }}</td>
-        </tr>
-        {% endfor %}
-    </table>
-</div>
+<h2>AI Demo Kripto Bot Panelė</h2>
+<form method="post" class="form-section">
+    <label>Ciklo intervalas (val.):</label>
+    <input name="interval" type="number" value="{{ settings['interval'] }}" min="1" max="24" />
+    <label>Porų kiekis:</label>
+    <input name="n_pairs" type="number" value="{{ settings['n_pairs'] }}" min="1" max="100" />
+    <label>TA Filtrai:</label>
+    {% for f in all_filters %}
+        <input type="checkbox" name="ta_filters" value="{{ f }}" {% if f in settings['ta_filters'] %}checked{% endif %}>{{ f }}
+    {% endfor %}
+    <button type="submit">Atnaujinti nustatymus</button>
+    <a href="{{ url_for('refresh_pairs') }}">Atnaujinti TOP100</a>
+    <a href="{{ url_for('stop_bot') }}">Stabdyti</a>
+    <a href="{{ url_for('start_bot') }}">Paleisti</a>
+</form>
+<h3>BALANSO GRAFIKAS</h3>
+<canvas id="balanceChart" width="800" height="200"></canvas>
 <script>
-const ctx = document.getElementById('balansas_chart').getContext('2d');
-const chart = new Chart(ctx, {
-    type: 'line',
-    data: {
-        labels: {{ times|safe }},
-        datasets: [{
-            label: 'Balanso pokytis (USDT)',
-            data: {{ graph|safe }},
-            borderColor: '#40fa93',
-            backgroundColor: 'rgba(64,250,147,0.1)',
-            tension: 0.2
-        }]
-    },
-    options: {
-        plugins: { legend: { display: false } },
-        scales: { x: { display: false } }
-    }
-});
+    const ctx = document.getElementById('balanceChart').getContext('2d');
+    new Chart(ctx, {
+        type: 'line',
+        data: {
+            labels: {{ times|tojson }},
+            datasets: [{
+                label: 'Balansas (USDT)',
+                data: {{ graph|tojson }},
+                borderWidth: 2,
+                fill: false,
+            }]
+        },
+        options: {
+            responsive: true,
+            scales: { y: { beginAtZero: false } }
+        }
+    });
 </script>
+<table>
+    <tr>
+        <th>Laikas</th>
+        <th>Pora</th>
+        <th>Kryptis</th>
+        <th>Kaina</th>
+        <th>Pelnas (USDT)</th>
+        <th>Procentai (%)</th>
+        <th>Komisinis (USDT)</th>
+        <th>Balansas</th>
+    </tr>
+    {% for t in trade_history %}
+    <tr>
+        <td>{{ t.laikas }}</td>
+        <td>{{ t.pora }}</td>
+        <td>{{ t.kryptis }}</td>
+        <td>{{ t.kaina }}</td>
+        <td>{{ t.pelnas }}</td>
+        <td>{{ t.procentai }}</td>
+        <td>{{ t.komisinis }}</td>
+        <td>{{ t.balansas }}</td>
+    </tr>
+    {% endfor %}
+</table>
+<h3>Dabartinis balansas: <span style="color: green;">{{ demo_balance }}</span> USDT</h3>
+<b>Boto būsena:</b> {{ bot_status }}
 </body>
 </html>
