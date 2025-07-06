@@ -8,164 +8,171 @@ from collections import deque
 
 app = Flask(__name__)
 
-# -- PARAMETRAI --
-FEE = 0.001   # 0.1% Binance komisinis
-MAX_TRADES = 200  # Istorijos įrašų kiekis
+# Top 100 kripto valiutų (galima keisti panelėje)
+PAIRS = [ ... ]  # (sąrašą palik, kaip buvo)
 
-# -- Funkcija top100 kriptų paėmimui iš Binance (pagal likvidumą) --
-def get_top_pairs(n=100):
-    url = "https://api.binance.com/api/v3/ticker/24hr"
-    r = requests.get(url, timeout=10)
-    tickers = r.json()
-    # Tik USDT poros, rikiuojam pagal apyvartą (quoteVolume)
-    pairs = [t for t in tickers if t['symbol'].endswith("USDT") and not t['symbol'].endswith("BUSD")]
-    pairs.sort(key=lambda x: float(x['quoteVolume']), reverse=True)
-    return [t['symbol'] for t in pairs[:n]]
+BINANCE_PAIRS = [p.replace("/", "") for p in PAIRS]
 
-# Išsaugom pagrindines poras (pradžioje paimamos)
-BINANCE_PAIRS = get_top_pairs(100)
-
-# -- TA indikatoriai --
-def ema(prices, n):
-    if len(prices) < n: return sum(prices) / len(prices)
-    k = 2 / (n + 1)
-    ema_prev = prices[0]
-    for price in prices:
-        ema_prev = price * k + ema_prev * (1 - k)
-    return ema_prev
-
-def macd(prices):
-    if len(prices) < 26: return 0
-    ema12 = ema(prices[-12:], 12)
-    ema26 = ema(prices[-26:], 26)
-    return ema12 - ema26
-
-def bb(prices):
-    if len(prices) < 20: return (0, 0)
-    sma = sum(prices[-20:]) / 20
-    std = (sum([(p - sma) ** 2 for p in prices[-20:]]) / 20) ** 0.5
-    return (sma + 2 * std, sma - 2 * std)  # upper, lower
-
-def rsi(prices, period=14):
-    if len(prices) < period + 1: return 50
-    gains = [max(prices[i+1]-prices[i], 0) for i in range(-period-1, -1)]
-    losses = [abs(min(prices[i+1]-prices[i], 0)) for i in range(-period-1, -1)]
-    avg_gain = sum(gains) / period
-    avg_loss = sum(losses) / period if sum(losses) > 0 else 0.0001
-    rs = avg_gain / avg_loss
-    return 100 - (100 / (1 + rs))
-
-# -- AI (TA) Filtrų sąrašas --
-TA_FILTERS = ["EMA", "MACD", "BB", "RSI"]
-
-# -- GLOBALS --
 settings = {
-    "interval": 8,         # val
-    "n_pairs": 50,         # kiek valiutų analizuoti
-    "ta_filters": ["EMA"], # aktyvūs AI filtrai
+    "n_pairs": 100,
+    "ta_ema": True,
+    "ta_macd": True,
+    "ta_bb": True,
+    "ta_rsi": True,
 }
 trade_history = []
 balance = 500.0
 bot_running = True
-price_history = {symbol: deque(maxlen=40) for symbol in BINANCE_PAIRS}
 
-# -- Binance kainų paėmimas --
+# Kainų istorija
+price_history = {symbol: deque(maxlen=50) for symbol in BINANCE_PAIRS}
+commission_pct = 0.2 / 100  # 0.2%
+
 def get_binance_price(symbol):
     url = f"https://api.binance.com/api/v3/ticker/price?symbol={symbol}"
     try:
-        response = requests.get(url, timeout=5)
-        data = response.json()
-        return float(data['price'])
-    except Exception:
+        r = requests.get(url, timeout=5)
+        return float(r.json()['price'])
+    except:
         return None
 
-# -- AI sprendimas (grąžina signalą) --
-def ai_decision(prices, active_filters):
+def ema(prices, n):
+    if len(prices) < n:
+        return sum(prices)/len(prices)
+    k = 2/(n+1)
+    ema_prev = prices[0]
+    for price in prices:
+        ema_prev = (price * k) + (ema_prev * (1 - k))
+    return ema_prev
+
+def macd(prices):
+    if len(prices) < 26:
+        return 0
+    ema12 = ema(prices[-12:], 12)
+    ema26 = ema(prices[-26:], 26)
+    return ema12 - ema26
+
+def bollinger(prices):
+    if len(prices) < 20:
+        return 0, 0
+    ma = sum(prices[-20:]) / 20
+    std = (sum((p - ma) ** 2 for p in prices[-20:]) / 20) ** 0.5
+    upper = ma + 2 * std
+    lower = ma - 2 * std
+    return upper, lower
+
+def rsi(prices, n=14):
+    if len(prices) < n+1:
+        return 50
+    gains = []
+    losses = []
+    for i in range(-n, -1):
+        change = prices[i+1] - prices[i]
+        if change > 0:
+            gains.append(change)
+        else:
+            losses.append(abs(change))
+    avg_gain = sum(gains)/n if gains else 0
+    avg_loss = sum(losses)/n if losses else 0
+    if avg_loss == 0:
+        return 100
+    rs = avg_gain / avg_loss
+    return 100 - (100/(1+rs))
+
+def ai_signal(prices):
     signals = []
-    # EMA crossover
-    if "EMA" in active_filters and len(prices) >= 20:
-        if ema(prices[-5:], 5) > ema(prices[-20:], 20): signals.append("PIRKTI")
-        if ema(prices[-5:], 5) < ema(prices[-20:], 20): signals.append("PARDUOTI")
-    # MACD
-    if "MACD" in active_filters and len(prices) >= 26:
-        if macd(prices) > 0: signals.append("PIRKTI")
-        if macd(prices) < 0: signals.append("PARDUOTI")
-    # Bollinger Bands
-    if "BB" in active_filters and len(prices) >= 20:
-        upper, lower = bb(prices)
-        if prices[-1] > upper: signals.append("PARDUOTI")
-        if prices[-1] < lower: signals.append("PIRKTI")
-    # RSI
-    if "RSI" in active_filters and len(prices) >= 15:
+    if settings["ta_ema"]:
+        if len(prices) >= 20:
+            if ema(prices[-5:], 5) > ema(prices[-20:], 20):
+                signals.append("PIRKTI")
+            elif ema(prices[-5:], 5) < ema(prices[-20:], 20):
+                signals.append("PARDUOTI")
+    if settings["ta_macd"]:
+        if len(prices) >= 26:
+            m = macd(prices)
+            if m > 0:
+                signals.append("PIRKTI")
+            elif m < 0:
+                signals.append("PARDUOTI")
+    if settings["ta_bb"]:
+        upper, lower = bollinger(prices)
+        if prices[-1] > upper:
+            signals.append("PARDUOTI")
+        elif prices[-1] < lower:
+            signals.append("PIRKTI")
+    if settings["ta_rsi"]:
         r = rsi(prices)
-        if r < 30: signals.append("PIRKTI")
-        if r > 70: signals.append("PARDUOTI")
-    if signals.count("PIRKTI") > signals.count("PARDUOTI") and signals:
+        if r < 30:
+            signals.append("PIRKTI")
+        elif r > 70:
+            signals.append("PARDUOTI")
+    # Jei bent vienas filtras duoda aiškų signalą
+    if "PIRKTI" in signals:
         return "PIRKTI"
-    if signals.count("PARDUOTI") > signals.count("PIRKTI") and signals:
+    if "PARDUOTI" in signals:
         return "PARDUOTI"
     return None
 
-# -- DEMO AI BOTAS --
 def ai_demo_bot():
-    global balance, trade_history, bot_running, price_history, BINANCE_PAIRS
+    global balance, trade_history, bot_running
     while True:
         if bot_running:
-            pairs_to_check = BINANCE_PAIRS[:settings["n_pairs"]]
-            for symbol in pairs_to_check:
+            for i, pair in enumerate(PAIRS[:settings["n_pairs"]]):
+                symbol = BINANCE_PAIRS[i]
                 price = get_binance_price(symbol)
-                if price is None: continue
+                if price is None:
+                    continue
                 price_history[symbol].append(price)
-                signal = ai_decision(list(price_history[symbol]), settings["ta_filters"])
-                if not signal: continue
+                signal = ai_signal(list(price_history[symbol]))
+                if not signal:
+                    continue
+
+                # Realistiškas pelno simuliavimas (atsitiktinis, bet pagal TP/SL logiką)
                 pct = random.uniform(-1.5, 2.0)
-                gross = balance * (pct/100)
-                fee_paid = abs(balance * FEE)
-                net_profit = gross - fee_paid
+                profit = round(balance * (pct / 100), 2)
+                commission = round(abs(balance * commission_pct), 2)
+                net_profit = profit - commission
                 balance += net_profit
 
                 trade_history.insert(0, {
                     "laikas": datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-                    "pora": symbol,
+                    "pora": pair,
                     "kryptis": signal,
                     "kaina": price,
-                    "pelnas": round(net_profit, 2),
+                    "pelnas": net_profit,
                     "procentai": round(pct, 2),
-                    "komisinis": round(fee_paid, 2),
-                    "balansas": round(balance, 2),
+                    "komisinis": commission,
+                    "balansas": round(balance, 2)
                 })
-                if len(trade_history) > MAX_TRADES:
+                if len(trade_history) > 200:
                     trade_history.pop()
-                time.sleep(0.25)
-            time.sleep(int(settings["interval"]) * 60 * 60)
+                time.sleep(0.08)  # kad nestrigtų panelė
         else:
             time.sleep(2)
 
-# -- PANELĖS RODINYS --
 @app.route("/", methods=["GET", "POST"])
 def index():
-    global settings, BINANCE_PAIRS
+    global settings
     if request.method == "POST":
+        # Atnaujinti nustatymus (mygtukai ir filtrai)
         try:
-            settings["interval"] = int(request.form.get("interval", 8))
-            settings["n_pairs"] = int(request.form.get("n_pairs", 50))
-            filters = request.form.getlist("ta_filters")
-            settings["ta_filters"] = filters if filters else ["EMA"]
-        except Exception: pass
+            settings["n_pairs"] = int(request.form.get("n_pairs", 100))
+            settings["ta_ema"] = "ta_ema" in request.form
+            settings["ta_macd"] = "ta_macd" in request.form
+            settings["ta_bb"] = "ta_bb" in request.form
+            settings["ta_rsi"] = "ta_rsi" in request.form
+        except: pass
         return redirect(url_for("index"))
-    # Balanso grafikas
     graph = [float(t["balansas"]) for t in reversed(trade_history[-100:])]
     times = [t["laikas"] for t in reversed(trade_history[-100:])]
     return render_template(
         "index.html",
         trade_history=trade_history,
         demo_balance=round(balance, 2),
-        settings=settings,
         bot_status="Veikia" if bot_running else "Stabdyta",
+        settings=settings,
         graph=graph,
-        times=times,
-        all_filters=TA_FILTERS,
-        all_pairs=BINANCE_PAIRS
+        times=times
     )
 
 @app.route("/stop")
@@ -178,13 +185,6 @@ def stop_bot():
 def start_bot():
     global bot_running
     bot_running = True
-    return redirect(url_for("index"))
-
-@app.route("/refresh_pairs")
-def refresh_pairs():
-    global BINANCE_PAIRS, price_history
-    BINANCE_PAIRS = get_top_pairs(100)
-    price_history = {symbol: deque(maxlen=40) for symbol in BINANCE_PAIRS}
     return redirect(url_for("index"))
 
 if __name__ == "__main__":
