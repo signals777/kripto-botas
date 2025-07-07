@@ -2,181 +2,115 @@
 <html lang="lt">
 <head>
     <meta charset="UTF-8">
-    <title>AI Kripto Bot Demo Panelė</title>
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <!-- Bootstrap 5 CDN -->
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
-    <!-- Chart.js CDN -->
-    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <title>AI Demo Kripto Bot Panelė</title>
     <style>
-        body { background: #23272F; color: #e1e1e1; }
-        .container { background: #181B20; border-radius: 16px; padding: 2rem; margin-top: 2rem; }
-        .btn-custom { min-width: 120px; margin: 2px; }
-        th, td { color: #c7ffd7; }
-        th { background: #20232a; }
-        .balance { color: #ffe960; font-size: 2rem; }
-        .profit { color: #60ff8a; }
-        .loss { color: #ff6060; }
-        .filter-check { margin-left: 10px; }
+        body { background: #232734; color: #fff; font-family: Arial; }
+        .container { max-width: 950px; margin: 25px auto; background: #232734; border-radius: 15px; padding: 25px; }
+        h2 { color: #7DF364; }
+        label, span { color: #fff; }
+        .btn { padding: 8px 18px; margin: 2px; border-radius: 8px; border: none; font-weight: bold; }
+        .btn-green { background: #32CD32; color: #fff; }
+        .btn-red { background: #E84646; color: #fff; }
+        .btn-blue { background: #399AF5; color: #fff; }
+        table { width: 100%; border-collapse: collapse; margin-top: 25px; background: #222; }
+        th, td { border: 1px solid #333; padding: 5px 6px; font-size: 14px; text-align: center; }
+        th { background: #1e1e26; color: #70ff94; }
+        .green { color: #32CD32; font-weight: bold; }
+        .red { color: #FF3333; font-weight: bold; }
     </style>
+    <!-- Chart.js grafikui -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 </head>
 <body>
 <div class="container">
-    <h2 class="text-center mb-4" style="color:#70ff96;">AI Kripto Demo Panelė</h2>
-    <div class="d-flex flex-wrap align-items-center justify-content-between mb-2">
-        <div>
-            <span>Balansas:</span>
-            <span class="balance">{{ demo_balance }} USDT</span>
-        </div>
-        <div>
-            <span>Boto būsena: 
-                {% if bot_status == "Veikia" %}
-                    <span class="profit">Veikia</span>
-                {% else %}
-                    <span class="loss">Stabdyta</span>
-                {% endif %}
-            </span>
-        </div>
+    <h2>AI Kripto Demo Panelė</h2>
+    <div style="font-size:18px;margin-bottom:10px;">
+        <b>Balansas:</b> <span style="color:gold;font-size:20px;">{{ demo_balance }} USDT</span><br>
+        <b>Boto būsena:</b>
+        <span style="color: {{ 'limegreen' if bot_status == 'Veikia' else 'crimson' }};">
+            {{ bot_status }}
+        </span>
     </div>
-    <form class="row g-2 align-items-center mb-3" method="post">
-        <div class="col-auto">
-            <label class="form-label">Porų kiekis:</label>
-            <input type="number" class="form-control" name="n_pairs" min="1" max="200" value="{{ settings.n_pairs }}">
-        </div>
-        <div class="col-auto">
-            <label class="form-label">TA Filtrai:</label>
-            <div>
-                <input type="checkbox" name="filter_ema" {% if 'EMA' in settings['filters'] %}checked{% endif %}> EMA
-                <input type="checkbox" name="filter_macd" {% if 'MACD' in settings['filters'] %}checked{% endif %}> MACD
-                <input type="checkbox" name="filter_bb" {% if 'BB' in settings['filters'] %}checked{% endif %}> BB
-                <input type="checkbox" name="filter_rsi" {% if 'RSI' in settings['filters'] %}checked{% endif %}> RSI
-            </div>
-        </div>
-        <div class="col-auto">
-            <button type="submit" class="btn btn-primary btn-custom">Atnaujinti nustatymus</button>
-        </div>
-        <div class="col-auto">
-            <a href="{{ url_for('update_pairs') }}" class="btn btn-outline-info btn-custom">Atnaujinti TOP100</a>
-        </div>
-        <div class="col-auto">
-            {% if bot_status == "Veikia" %}
-                <a href="{{ url_for('stop_bot') }}" class="btn btn-danger btn-custom">Stabdyti</a>
-            {% else %}
-                <a href="{{ url_for('start_bot') }}" class="btn btn-success btn-custom">Paleisti</a>
-            {% endif %}
-            <a href="{{ url_for('refresh') }}" class="btn btn-secondary btn-custom">Atnaujinti</a>
-        </div>
+
+    <!-- Nustatymai -->
+    <form method="POST" style="display:inline-block;margin-bottom:14px;">
+        <!-- Nėra ciklo trukmės laukelio -->
+        Porų kiekis:
+        <input type="number" name="n_pairs" value="{{ settings['n_pairs'] }}" min="5" max="200" style="width: 50px;" />
+
+        TA Filtrai:
+        <label><input type="checkbox" name="ta_ema" {% if settings.get('ta_ema', True) %}checked{% endif %}>EMA</label>
+        <label><input type="checkbox" name="ta_macd" {% if settings.get('ta_macd', True) %}checked{% endif %}>MACD</label>
+        <label><input type="checkbox" name="ta_bb" {% if settings.get('ta_bb', True) %}checked{% endif %}>BB</label>
+        <label><input type="checkbox" name="ta_rsi" {% if settings.get('ta_rsi', True) %}checked{% endif %}>RSI</label>
+
+        <button class="btn btn-blue" type="submit">Atnaujinti nustatymus</button>
     </form>
 
-    <!-- BALANSO GRAFIKAS -->
-    <h5 class="mt-4">Balanso grafikas</h5>
-    <canvas id="balanceChart" height="60"></canvas>
+    <a class="btn btn-blue" href="{{ url_for('refresh') }}">Atnaujinti</a>
+    <a class="btn btn-green" href="{{ url_for('start_bot') }}">Paleisti</a>
+    <a class="btn btn-red" href="{{ url_for('stop_bot') }}">Stabdyti</a>
 
-    <!-- PELNO GRAFIKAS -->
-    <h5 class="mt-4">Pelno pokytis (USD)</h5>
-    <canvas id="profitChart" height="40"></canvas>
-
-    <!-- SANDORIŲ SRAUTO GRAFIKAS -->
-    <h5 class="mt-4">Sandorių kiekis per valandą</h5>
-    <canvas id="tradeFlowChart" height="40"></canvas>
-
-    <!-- LENTELĖ -->
-    <h5 class="mt-4">Paskutiniai sandoriai</h5>
-    <div style="overflow-x:auto;">
-        <table class="table table-dark table-striped table-sm align-middle">
-            <thead>
-                <tr>
-                    <th>Laikas</th>
-                    <th>Pora</th>
-                    <th>Kryptis</th>
-                    <th>Kaina</th>
-                    <th>Pelnas (USDT)</th>
-                    <th>Procentai (%)</th>
-                    <th>Komisinis (USDT)</th>
-                    <th>Balansas</th>
-                </tr>
-            </thead>
-            <tbody>
-                {% for t in trade_history %}
-                <tr>
-                    <td>{{ t.laikas }}</td>
-                    <td>{{ t.pora }}</td>
-                    <td>{{ t.kryptis }}</td>
-                    <td>{{ t.kaina }}</td>
-                    <td class="{{ 'profit' if t.pelnas > 0 else 'loss' }}">{{ t.pelnas }}</td>
-                    <td>{{ t.procentai }}</td>
-                    <td>{{ t.komisinis }}</td>
-                    <td>{{ t.balansas }}</td>
-                </tr>
-                {% endfor %}
-            </tbody>
-        </table>
+    <div style="margin:12px 0;font-size:13px;">
+        <b>AI analizė veikia nuolat – sandoriai vykdomi realiu laiku pagal signalus.</b>
     </div>
+
+    <!-- Grafikas -->
+    <h3>BALANSO GRAFIKAS</h3>
+    <canvas id="balansoGrafikas" height="50"></canvas>
+
+    <!-- Sandorių lentelė -->
+    <table>
+        <tr>
+            <th>Laikas</th>
+            <th>Pora</th>
+            <th>Kryptis</th>
+            <th>Kaina</th>
+            <th>Pelnas (USDT)</th>
+            <th>Procentai (%)</th>
+            <th>Komisinis (USDT)</th>
+            <th>Balansas</th>
+        </tr>
+        {% for t in trade_history[:50] %}
+        <tr>
+            <td>{{ t.laikas }}</td>
+            <td>{{ t.pora }}</td>
+            <td>{{ t.kryptis }}</td>
+            <td>{{ t.kaina }}</td>
+            <td class="{{ 'green' if t.pelnas >=0 else 'red' }}">{{ t.pelnas }}</td>
+            <td>{{ t.procentai }}</td>
+            <td>{{ t.komisinis }}</td>
+            <td>{{ t.balansas }}</td>
+        </tr>
+        {% endfor %}
+    </table>
 </div>
 
 <script>
-    // Balanso grafikas
-    const balanceChart = new Chart(document.getElementById('balanceChart').getContext('2d'), {
-        type: 'line',
-        data: {
-            labels: {{ times|tojson }},
-            datasets: [{
-                label: 'Balansas (USDT)',
-                data: {{ graph|tojson }},
-                borderColor: "#ffe960",
-                backgroundColor: "rgba(255,233,96,0.1)",
-                tension: 0.2,
-                pointRadius: 1
-            }]
+const ctx = document.getElementById('balansoGrafikas').getContext('2d');
+const balansoData = {{ graph|tojson }};
+const labels = {{ times|tojson }};
+const grafikas = new Chart(ctx, {
+    type: 'line',
+    data: {
+        labels: labels,
+        datasets: [{
+            label: 'Balansas (USDT)',
+            data: balansoData,
+            fill: false,
+            borderColor: 'limegreen',
+            tension: 0.18
+        }]
+    },
+    options: {
+        plugins: {
+            legend: { display: false }
         },
-        options: {
-            plugins: { legend: { display: false }},
-            scales: {
-                x: { display: false },
-                y: { beginAtZero: false }
-            }
+        scales: {
+            y: { beginAtZero: false }
         }
-    });
-
-    // Pelno grafikas
-    const profitChart = new Chart(document.getElementById('profitChart').getContext('2d'), {
-        type: 'bar',
-        data: {
-            labels: {{ times|tojson }},
-            datasets: [{
-                label: 'Pelnas',
-                data: {{ profits|tojson }},
-                backgroundColor: "#60ff8a"
-            }]
-        },
-        options: {
-            plugins: { legend: { display: false }},
-            scales: {
-                x: { display: false },
-                y: { beginAtZero: true }
-            }
-        }
-    });
-
-    // Sandorių kiekio grafikas (pvz. per valandą)
-    const tradeFlowChart = new Chart(document.getElementById('tradeFlowChart').getContext('2d'), {
-        type: 'bar',
-        data: {
-            labels: {{ trade_flow_times|tojson }},
-            datasets: [{
-                label: 'Sandorių kiekis',
-                data: {{ trade_flow_counts|tojson }},
-                backgroundColor: "#70bfff"
-            }]
-        },
-        options: {
-            plugins: { legend: { display: false }},
-            scales: {
-                x: { beginAtZero: false },
-                y: { beginAtZero: true }
-            }
-        }
-    });
+    }
+});
 </script>
 </body>
 </html>
