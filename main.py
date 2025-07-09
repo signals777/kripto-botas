@@ -5,8 +5,8 @@ from datetime import datetime
 import threading
 import time
 from pybit.unified_trading import HTTP
-from ta.momentum import RSIIndicator, StochasticOscillator, CCIIndicator
-from ta.trend import EMAIndicator, SMAIndicator
+from ta.momentum import RSIIndicator, StochasticOscillator
+from ta.trend import EMAIndicator, SMAIndicator, CCIIndicator
 from ta.volatility import BollingerBands
 from ta.volume import OnBalanceVolumeIndicator
 from ta.volatility import AverageTrueRange
