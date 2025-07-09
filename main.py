@@ -1,194 +1,178 @@
-import requests
+# === app.py sugeneruota 2025-07-09 16:42:00 ===
+
 from flask import Flask, render_template, request, redirect, url_for
 from datetime import datetime
 import threading
 import time
-import random
-from collections import deque
+from pybit.unified_trading import HTTP
+from ta.momentum import RSIIndicator, StochasticOscillator, CCIIndicator
+from ta.trend import EMAIndicator, SMAIndicator
+from ta.volatility import BollingerBands
+from ta.volume import OnBalanceVolumeIndicator
+from ta.volatility import AverageTrueRange
+from ta.trend import VWAPIndicator
+import pandas as pd
+import requests
 
 app = Flask(__name__)
 
-# -- PARAMETRAI --
-FEE = 0.001   # 0.1% Binance komisinis
-MAX_TRADES = 200  # Istorijos įrašų kiekis
+# BYBIT API
+session = HTTP(
+    api_key="b2tL6abuyH7gEQjIC1",
+    api_secret="azEVdZmiRBlHID75zQehXHYYYKw0jB8DDFPJ",
+    testnet=False,
+)
 
-# -- Funkcija top100 kriptų paėmimui iš Binance (pagal likvidumą) --
-def get_top_pairs(n=100):
-    url = "https://api.binance.com/api/v3/ticker/24hr"
-    r = requests.get(url, timeout=10)
-    tickers = r.json()
-    # Tik USDT poros, rikiuojam pagal apyvartą (quoteVolume)
-    pairs = [t for t in tickers if t['symbol'].endswith("USDT") and not t['symbol'].endswith("BUSD")]
-    pairs.sort(key=lambda x: float(x['quoteVolume']), reverse=True)
-    return [t['symbol'] for t in pairs[:n]]
-
-# Išsaugom pagrindines poras (pradžioje paimamos)
-BINANCE_PAIRS = get_top_pairs(100)
-
-# -- TA indikatoriai --
-def ema(prices, n):
-    if len(prices) < n: return sum(prices) / len(prices)
-    k = 2 / (n + 1)
-    ema_prev = prices[0]
-    for price in prices:
-        ema_prev = price * k + ema_prev * (1 - k)
-    return ema_prev
-
-def macd(prices):
-    if len(prices) < 26: return 0
-    ema12 = ema(prices[-12:], 12)
-    ema26 = ema(prices[-26:], 26)
-    return ema12 - ema26
-
-def bb(prices):
-    if len(prices) < 20: return (0, 0)
-    sma = sum(prices[-20:]) / 20
-    std = (sum([(p - sma) ** 2 for p in prices[-20:]]) / 20) ** 0.5
-    return (sma + 2 * std, sma - 2 * std)  # upper, lower
-
-def rsi(prices, period=14):
-    if len(prices) < period + 1: return 50
-    gains = [max(prices[i+1]-prices[i], 0) for i in range(-period-1, -1)]
-    losses = [abs(min(prices[i+1]-prices[i], 0)) for i in range(-period-1, -1)]
-    avg_gain = sum(gains) / period
-    avg_loss = sum(losses) / period if sum(losses) > 0 else 0.0001
-    rs = avg_gain / avg_loss
-    return 100 - (100 / (1 + rs))
-
-# -- AI (TA) Filtrų sąrašas --
-TA_FILTERS = ["EMA", "MACD", "BB", "RSI"]
-
-# -- GLOBALS --
+# Pagrindiniai nustatymai
 settings = {
-    "interval": 8,         # val
-    "n_pairs": 50,         # kiek valiutų analizuoti
-    "ta_filters": ["EMA"], # aktyvūs AI filtrai
+    "leverage": 5,
+    "position_size_pct": 10,
+    "take_profit": 0.03,
+    "stop_loss": 0.015,
+    "n_pairs": 100,
+    "cooldown": 5,
+    "ta_filters": ["EMA", "RSI", "BB", "StochRSI", "CCI", "SMA", "VWAP", "Volume", "ATR", "AI"]
 }
-trade_history = []
-balance = 500.0
-bot_running = True
-price_history = {symbol: deque(maxlen=40) for symbol in BINANCE_PAIRS}
 
-# -- Binance kainų paėmimas --
-def get_binance_price(symbol):
-    url = f"https://api.binance.com/api/v3/ticker/price?symbol={symbol}"
+balance = 1000.0
+last_trade_time = {}
+symbols = []
+
+def fetch_top_symbols():
+    global symbols
+    response = session.get_tickers(category="linear")
+    data = response.get("result", {}).get("list", [])
+    usdt_pairs = [item["symbol"] for item in data if item["symbol"].endswith("USDT")]
+    symbols = usdt_pairs[:settings["n_pairs"]]
+
+def get_klines(symbol, interval="15"):
     try:
-        response = requests.get(url, timeout=5)
-        data = response.json()
-        return float(data['price'])
-    except Exception:
+        klines = session.get_kline(
+            category="linear",
+            symbol=symbol,
+            interval=interval,
+            limit=100
+        )
+        data = klines['result']['list']
+        df = pd.DataFrame(data, columns=[
+            "timestamp", "open", "high", "low", "close", "volume", "", "", "", "", "", ""
+        ])
+        df["close"] = df["close"].astype(float)
+        df["high"] = df["high"].astype(float)
+        df["low"] = df["low"].astype(float)
+        df["volume"] = df["volume"].astype(float)
+        return df
+    except:
         return None
 
-# -- AI sprendimas (grąžina signalą) --
-def ai_decision(prices, active_filters):
-    signals = []
-    # EMA crossover
-    if "EMA" in active_filters and len(prices) >= 20:
-        if ema(prices[-5:], 5) > ema(prices[-20:], 20): signals.append("PIRKTI")
-        if ema(prices[-5:], 5) < ema(prices[-20:], 20): signals.append("PARDUOTI")
-    # MACD
-    if "MACD" in active_filters and len(prices) >= 26:
-        if macd(prices) > 0: signals.append("PIRKTI")
-        if macd(prices) < 0: signals.append("PARDUOTI")
-    # Bollinger Bands
-    if "BB" in active_filters and len(prices) >= 20:
-        upper, lower = bb(prices)
-        if prices[-1] > upper: signals.append("PARDUOTI")
-        if prices[-1] < lower: signals.append("PIRKTI")
-    # RSI
-    if "RSI" in active_filters and len(prices) >= 15:
-        r = rsi(prices)
-        if r < 30: signals.append("PIRKTI")
-        if r > 70: signals.append("PARDUOTI")
-    if signals.count("PIRKTI") > signals.count("PARDUOTI") and signals:
-        return "PIRKTI"
-    if signals.count("PARDUOTI") > signals.count("PIRKTI") and signals:
-        return "PARDUOTI"
-    return None
+def apply_ta_filters(df):
+    score = 0
+    try:
+        if "EMA" in settings["ta_filters"]:
+            ema_fast = EMAIndicator(df["close"], window=5).ema_indicator()
+            ema_slow = EMAIndicator(df["close"], window=20).ema_indicator()
+            if ema_fast.iloc[-1] > ema_slow.iloc[-1]:
+                score += 1
 
-# -- DEMO AI BOTAS --
-def ai_demo_bot():
-    global balance, trade_history, bot_running, price_history, BINANCE_PAIRS
+        if "SMA" in settings["ta_filters"]:
+            sma_fast = SMAIndicator(df["close"], window=5).sma_indicator()
+            sma_slow = SMAIndicator(df["close"], window=20).sma_indicator()
+            if sma_fast.iloc[-1] > sma_slow.iloc[-1]:
+                score += 1
+
+        if "RSI" in settings["ta_filters"]:
+            rsi = RSIIndicator(df["close"]).rsi()
+            if rsi.iloc[-1] < 30:
+                score += 1
+
+        if "StochRSI" in settings["ta_filters"]:
+            stoch = StochasticOscillator(df["high"], df["low"], df["close"])
+            if stoch.stoch().iloc[-1] < 20:
+                score += 1
+
+        if "CCI" in settings["ta_filters"]:
+            cci = CCIIndicator(df["high"], df["low"], df["close"], window=20).cci()
+            if cci.iloc[-1] < -100:
+                score += 1
+
+        if "BB" in settings["ta_filters"]:
+            bb = BollingerBands(df["close"])
+            if df["close"].iloc[-1] < bb.bollinger_lband().iloc[-1]:
+                score += 1
+
+        if "VWAP" in settings["ta_filters"]:
+            vwap = VWAPIndicator(df["high"], df["low"], df["close"], df["volume"])
+            if df["close"].iloc[-1] < vwap.vwap().iloc[-1]:
+                score += 1
+
+        if "Volume" in settings["ta_filters"]:
+            obv = OnBalanceVolumeIndicator(df["close"], df["volume"]).on_balance_volume()
+            if obv.iloc[-1] > obv.iloc[-2]:
+                score += 1
+
+        if "ATR" in settings["ta_filters"]:
+            atr = AverageTrueRange(df["high"], df["low"], df["close"]).average_true_range()
+            if atr.iloc[-1] > atr.iloc[-2]:
+                score += 1
+
+        if "AI" in settings["ta_filters"]:
+            ema5 = EMAIndicator(df["close"], window=5).ema_indicator()
+            ema20 = EMAIndicator(df["close"], window=20).ema_indicator()
+            rsi = RSIIndicator(df["close"]).rsi()
+            if ema5.iloc[-1] > ema20.iloc[-1] and rsi.iloc[-1] < 35:
+                score += 1
+
+    except Exception as e:
+        print("TA klaida:", e)
+
+    return score
+
+def place_order(symbol, side):
+    try:
+        session.place_order(
+            category="linear",
+            symbol=symbol,
+            side=side,
+            order_type="Market",
+            qty=calculate_qty(symbol),
+            time_in_force="GoodTillCancel",
+            reduce_only=False
+        )
+        print(f"✅ {side} įvykdytas: {symbol}")
+    except Exception as e:
+        print(f"❌ Užsakymo klaida {symbol}: {e}")
+
+def calculate_qty(symbol):
+    try:
+        balance_info = session.get_wallet_balance(accountType="UNIFIED")
+        usdt = float(balance_info["result"]["list"][0]["totalEquity"])
+        amount = usdt * settings["position_size_pct"] / 100
+        price = float(session.get_ticker(category="linear", symbol=symbol)["result"]["list"][0]["lastPrice"])
+        qty = round((amount * settings["leverage"]) / price, 3)
+        return qty
+    except:
+        return 0.01
+
+def trading_loop():
     while True:
-        if bot_running:
-            pairs_to_check = BINANCE_PAIRS[:settings["n_pairs"]]
-            for symbol in pairs_to_check:
-                price = get_binance_price(symbol)
-                if price is None: continue
-                price_history[symbol].append(price)
-                signal = ai_decision(list(price_history[symbol]), settings["ta_filters"])
-                if not signal: continue
-                pct = random.uniform(-1.5, 2.0)
-                gross = balance * (pct/100)
-                fee_paid = abs(balance * FEE)
-                net_profit = gross - fee_paid
-                balance += net_profit
+        fetch_top_symbols()
+        for symbol in symbols:
+            df = get_klines(symbol)
+            if df is None or len(df) < 50:
+                continue
+            score = apply_ta_filters(df)
+            now = time.time()
+            if score >= 3 and now - last_trade_time.get(symbol, 0) > settings["cooldown"] * 60:
+                place_order(symbol, side="Buy")
+                last_trade_time[symbol] = now
+        time.sleep(60)
 
-                trade_history.insert(0, {
-                    "laikas": datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-                    "pora": symbol,
-                    "kryptis": signal,
-                    "kaina": price,
-                    "pelnas": round(net_profit, 2),
-                    "procentai": round(pct, 2),
-                    "komisinis": round(fee_paid, 2),
-                    "balansas": round(balance, 2),
-                })
-                if len(trade_history) > MAX_TRADES:
-                    trade_history.pop()
-                time.sleep(0.25)
-            time.sleep(int(settings["interval"]) * 60 * 60)
-        else:
-            time.sleep(2)
-
-# -- PANELĖS RODINYS --
-@app.route("/", methods=["GET", "POST"])
+@app.route("/")
 def index():
-    global settings, BINANCE_PAIRS
-    if request.method == "POST":
-        try:
-            settings["interval"] = int(request.form.get("interval", 8))
-            settings["n_pairs"] = int(request.form.get("n_pairs", 50))
-            filters = request.form.getlist("ta_filters")
-            settings["ta_filters"] = filters if filters else ["EMA"]
-        except Exception: pass
-        return redirect(url_for("index"))
-    # Balanso grafikas
-    graph = [float(t["balansas"]) for t in reversed(trade_history[-100:])]
-    times = [t["laikas"] for t in reversed(trade_history[-100:])]
-    return render_template(
-        "index.html",
-        trade_history=trade_history,
-        demo_balance=round(balance, 2),
-        settings=settings,
-        bot_status="Veikia" if bot_running else "Stabdyta",
-        graph=graph,
-        times=times,
-        all_filters=TA_FILTERS,
-        all_pairs=BINANCE_PAIRS
-    )
-
-@app.route("/stop")
-def stop_bot():
-    global bot_running
-    bot_running = False
-    return redirect(url_for("index"))
-
-@app.route("/start")
-def start_bot():
-    global bot_running
-    bot_running = True
-    return redirect(url_for("index"))
-
-@app.route("/refresh_pairs")
-def refresh_pairs():
-    global BINANCE_PAIRS, price_history
-    BINANCE_PAIRS = get_top_pairs(100)
-    price_history = {symbol: deque(maxlen=40) for symbol in BINANCE_PAIRS}
-    return redirect(url_for("index"))
+    return f"<h3>Bybit AI Bot veikia. TOP {settings['n_pairs']} porų. Naudojami filtrai: {', '.join(settings['ta_filters'])}</h3>"
 
 if __name__ == "__main__":
-    t = threading.Thread(target=ai_demo_bot)
+    t = threading.Thread(target=trading_loop)
     t.daemon = True
     t.start()
     app.run(host="0.0.0.0", port=8000)
