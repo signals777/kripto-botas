@@ -1,35 +1,64 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>AI Kripto Demo Panelė</title>
-    <meta http-equiv="refresh" content="120">
+    <title>AI Kripto Prekybos Panelė</title>
+    <meta http-equiv="refresh" content="60">
     <style>
-        body { font-family: Arial, sans-serif; }
-        table { width: 100%; border-collapse: collapse; margin-bottom: 20px;}
-        th, td { border: 1px solid #ccc; padding: 6px; text-align: center;}
-        th { background: #f4f4f4;}
-        .form-section { margin: 20px 0; }
+        body { font-family: Arial, sans-serif; margin: 20px; }
+        table { width: 100%; border-collapse: collapse; margin-bottom: 20px; }
+        th, td { border: 1px solid #ccc; padding: 6px; text-align: center; }
+        th { background-color: #f2f2f2; }
+        .form-section { margin-bottom: 20px; }
     </style>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 </head>
 <body>
-<h2>AI Demo Kripto Bot Panelė</h2>
+
+<h2>AI Kripto Prekybos Panelė</h2>
+
 <form method="post" class="form-section">
-    <label>Ciklo intervalas (val.):</label>
-    <input name="interval" type="number" value="{{ settings['interval'] }}" min="1" max="24" />
-    <label>Porų kiekis:</label>
-    <input name="n_pairs" type="number" value="{{ settings['n_pairs'] }}" min="1" max="100" />
-    <label>TA Filtrai:</label>
+    <label>Porų kiekis (1–100):</label>
+    <input type="number" name="n_pairs" value="{{ settings['n_pairs'] }}" min="1" max="100" />
+    <br><br>
+    <label>Techninės analizės filtrai:</label><br>
     {% for f in all_filters %}
         <input type="checkbox" name="ta_filters" value="{{ f }}" {% if f in settings['ta_filters'] %}checked{% endif %}>{{ f }}
     {% endfor %}
-    <button type="submit">Atnaujinti nustatymus</button>
-    <a href="{{ url_for('refresh_pairs') }}">Atnaujinti TOP100</a>
-    <a href="{{ url_for('stop_bot') }}">Stabdyti</a>
-    <a href="{{ url_for('start_bot') }}">Paleisti</a>
+    <br><br>
+    <button type="submit">💾 Išsaugoti nustatymus</button>
+    <a href="{{ url_for('start_bot') }}">▶️ Paleisti Botą</a>
+    <a href="{{ url_for('stop_bot') }}">⏹️ Stabdyti Botą</a>
 </form>
-<h3>BALANSO GRAFIKAS</h3>
-<canvas id="balanceChart" width="800" height="200"></canvas>
+
+<h3>Boto būsena: <span style="color: green;">{{ bot_status }}</span></h3>
+<h4>Balansas: <span style="color: blue;">{{ demo_balance }} USDT</span></h4>
+
+<h3>Sandorių istorija</h3>
+<table>
+    <thead>
+        <tr>
+            <th>Laikas</th>
+            <th>Pora</th>
+            <th>Kryptis</th>
+            <th>Kaina</th>
+            <th>Pozicija (USDT)</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for t in trade_history %}
+        <tr>
+            <td>{{ t.laikas }}</td>
+            <td>{{ t.pora }}</td>
+            <td>{{ t.kryptis }}</td>
+            <td>{{ t.kaina }}</td>
+            <td>{{ t.pozicija }}</td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+
+<h3>Balanso grafikas</h3>
+<canvas id="balanceChart" width="800" height="300"></canvas>
 <script>
     const ctx = document.getElementById('balanceChart').getContext('2d');
     new Chart(ctx, {
@@ -39,41 +68,19 @@
             datasets: [{
                 label: 'Balansas (USDT)',
                 data: {{ graph|tojson }},
+                borderColor: 'blue',
                 borderWidth: 2,
-                fill: false,
+                fill: false
             }]
         },
         options: {
             responsive: true,
-            scales: { y: { beginAtZero: false } }
+            scales: {
+                y: { beginAtZero: false }
+            }
         }
     });
 </script>
-<table>
-    <tr>
-        <th>Laikas</th>
-        <th>Pora</th>
-        <th>Kryptis</th>
-        <th>Kaina</th>
-        <th>Pelnas (USDT)</th>
-        <th>Procentai (%)</th>
-        <th>Komisinis (USDT)</th>
-        <th>Balansas</th>
-    </tr>
-    {% for t in trade_history %}
-    <tr>
-        <td>{{ t.laikas }}</td>
-        <td>{{ t.pora }}</td>
-        <td>{{ t.kryptis }}</td>
-        <td>{{ t.kaina }}</td>
-        <td>{{ t.pelnas }}</td>
-        <td>{{ t.procentai }}</td>
-        <td>{{ t.komisinis }}</td>
-        <td>{{ t.balansas }}</td>
-    </tr>
-    {% endfor %}
-</table>
-<h3>Dabartinis balansas: <span style="color: green;">{{ demo_balance }}</span> USDT</h3>
-<b>Boto būsena:</b> {{ bot_status }}
+
 </body>
 </html>
