@@ -1,18 +1,13 @@
-# === app.py sugeneruota 2025-07-09 16:42:00 ===
-
-from flask import Flask, render_template, request, redirect, url_for
+from flask import Flask
 from datetime import datetime
 import threading
 import time
 from pybit.unified_trading import HTTP
 from ta.momentum import RSIIndicator, StochasticOscillator
 from ta.trend import EMAIndicator, SMAIndicator, CCIIndicator
-from ta.volatility import BollingerBands
+from ta.volatility import BollingerBands, AverageTrueRange
 from ta.volume import OnBalanceVolumeIndicator
-from ta.volatility import AverageTrueRange
-from ta.trend import VWAPIndicator
 import pandas as pd
-import requests
 
 app = Flask(__name__)
 
@@ -23,7 +18,7 @@ session = HTTP(
     testnet=False,
 )
 
-# Pagrindiniai nustatymai
+# Nustatymai
 settings = {
     "leverage": 5,
     "position_size_pct": 10,
@@ -101,8 +96,11 @@ def apply_ta_filters(df):
                 score += 1
 
         if "VWAP" in settings["ta_filters"]:
-            vwap = VWAPIndicator(df["high"], df["low"], df["close"], df["volume"])
-            if df["close"].iloc[-1] < vwap.vwap().iloc[-1]:
+            typical_price = (df["high"] + df["low"] + df["close"]) / 3
+            cumulative_tp_vol = (typical_price * df["volume"]).cumsum()
+            cumulative_vol = df["volume"].cumsum()
+            vwap = cumulative_tp_vol / cumulative_vol
+            if df["close"].iloc[-1] < vwap.iloc[-1]:
                 score += 1
 
         if "Volume" in settings["ta_filters"]:
