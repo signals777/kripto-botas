@@ -20,8 +20,8 @@ USERS = {
 
 # Bybit API
 session_api = HTTP(
-    api_key="TAVO_API_KEY",
-    api_secret="TAVO_API_SECRET",
+    api_key="b2tL6abuyH7gEQjIC1",
+    api_secret="azEVdZmiRBlHID75zQehXHYYYKw0jB8DDFPJ",
     testnet=False,
 )
 
