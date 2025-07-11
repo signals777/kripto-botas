@@ -15,7 +15,7 @@ app.permanent_session_lifetime = timedelta(minutes=60)
 
 # Vartotojai
 USERS = {
-    "admin": "slaptazodis123"
+    "virglel@gmail.com": "QwertghjkL123***"
 }
 
 # Bybit API
@@ -234,8 +234,9 @@ def change_password():
 
 # ----------------------
 
-if __name__ == "__main__":
+@app.before_first_request
+def activate_bot():
+    print("🔁 Boto ciklas paleistas")
     t = threading.Thread(target=trading_loop)
     t.daemon = True
     t.start()
-    app.run(host="0.0.0.0", port=8000)
