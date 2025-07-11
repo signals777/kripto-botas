@@ -14,9 +14,20 @@
 </head>
 <body>
 
+{% if not session.get('user') %}
+    <h2>Prisijungimas</h2>
+    <form method="POST" action="{{ url_for('login') }}">
+        <label>Vartotojo vardas:</label><br>
+        <input type="text" name="username"><br><br>
+        <label>Slaptažodis:</label><br>
+        <input type="password" name="password"><br><br>
+        <button type="submit">Prisijungti</button>
+    </form>
+{% else %}
+
 <h2>AI Kripto Prekybos Panelė</h2>
 
-<form method="post" class="form-section">
+<form method="post" class="form-section" action="{{ url_for('index') }}">
     <label>Porų kiekis (1–100):</label>
     <input type="number" name="n_pairs" value="{{ settings['n_pairs'] }}" min="1" max="100" />
     <br><br>
@@ -28,10 +39,11 @@
     <button type="submit">💾 Išsaugoti nustatymus</button>
     <a href="{{ url_for('start_bot') }}">▶️ Paleisti Botą</a>
     <a href="{{ url_for('stop_bot') }}">⏹️ Stabdyti Botą</a>
+    <a href="{{ url_for('logout') }}">🚪 Atsijungti</a>
 </form>
 
 <h3>Boto būsena: <span style="color: green;">{{ bot_status }}</span></h3>
-<h4>Balansas: <span style="color: blue;">{{ demo_balance }} USDT</span></h4>
+<h4>Balansas: <span style="color: blue;">{{ balance }} USDT</span></h4>
 
 <h3>Sandorių istorija</h3>
 <table>
@@ -81,6 +93,17 @@
         }
     });
 </script>
+
+<h3>🔑 Keisti slaptažodį</h3>
+<form method="POST" action="{{ url_for('change_password') }}">
+    <label>Senas slaptažodis:</label><br>
+    <input type="password" name="old_password"><br><br>
+    <label>Naujas slaptažodis:</label><br>
+    <input type="password" name="new_password"><br><br>
+    <button type="submit">🔁 Pakeisti</button>
+</form>
+
+{% endif %}
 
 </body>
 </html>
