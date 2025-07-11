@@ -10,12 +10,11 @@ from ta.volatility import BollingerBands, AverageTrueRange
 from ta.volume import OnBalanceVolumeIndicator
 
 app = Flask(__name__)
-app.secret_key = 'tavo_slaptas_raktas'  # Pakeisk į saugų raktą!
+app.secret_key = 'azEVdZmiRBlHID75zQehXHYYYKw0jB8DDFPJ'  # Pakeisk į saugų raktą!
 app.permanent_session_lifetime = timedelta(minutes=60)
 
 # Vartotojai
-USERS = {
-    "virglel@gmail.com": "QwertghjkL123***"
+USERS = {"virglel@gmail.com": "QwertghjkL123***
 }
 
 # Bybit API
@@ -188,7 +187,7 @@ def index():
         settings=settings,
         bot_status=bot_status,
         trade_history=trade_history[::-1],
-        demo_balance=balance_info()["balansas"],
+        balance=balance_info()["balansas"],
         all_filters=["EMA", "RSI", "BB", "StochRSI", "CCI", "SMA", "VWAP", "Volume", "ATR", "AI"],
         graph=balance_graph,
         times=balance_times
