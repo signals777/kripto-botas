@@ -233,7 +233,6 @@ def change_password():
     return "<h3>Neteisingas senas slaptažodis.</h3>"
 
 # ----------------------
-
 @app.before_first_request
 def activate_bot():
     print("🔁 Boto ciklas paleistas")
