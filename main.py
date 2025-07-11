@@ -232,9 +232,10 @@ def change_password():
     return "<h3>Neteisingas senas slaptažodis.</h3>"
 
 # ----------------------
-if __name__ == "__main__":
+@app.before_first_request
+def activate_bot():
     print("🔁 Boto ciklas paleistas")
     t = threading.Thread(target=trading_loop)
     t.daemon = True
     t.start()
-    app.run(host="0.0.0.0", port=8000)
+   
