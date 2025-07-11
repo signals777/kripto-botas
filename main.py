@@ -10,7 +10,7 @@ from ta.volatility import BollingerBands, AverageTrueRange
 from ta.volume import OnBalanceVolumeIndicator
 
 app = Flask(__name__)
-app.secret_key = 'azEVdZmiRBlHID75zQehXHYYYKw0jB8DDFPJ'  # Pakeisk į saugų raktą!
+app.secret_key = 'QwertghjkL123***'  # Pakeisk į saugų raktą!
 app.permanent_session_lifetime = timedelta(minutes=60)
 
 # Vartotojai
