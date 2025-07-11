@@ -14,7 +14,7 @@ app.secret_key = 'azEVdZmiRBlHID75zQehXHYYYKw0jB8DDFPJ'  # Pakeisk į saugų rak
 app.permanent_session_lifetime = timedelta(minutes=60)
 
 # Vartotojai
-USERS = {"v@gmail.com": "*********L123***
+USERS = {"virglel@gmail.com": "QwertghjkL123***
 }
 
 # Bybit API
