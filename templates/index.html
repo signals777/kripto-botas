@@ -1,109 +1,150 @@
 <!DOCTYPE html>
-<html>
+<html lang="lt">
 <head>
-    <title>AI Kripto Prekybos Panelė</title>
-    <meta http-equiv="refresh" content="60">
-    <style>
-        body { font-family: Arial, sans-serif; margin: 20px; }
-        table { width: 100%; border-collapse: collapse; margin-bottom: 20px; }
-        th, td { border: 1px solid #ccc; padding: 6px; text-align: center; }
-        th { background-color: #f2f2f2; }
-        .form-section { margin-bottom: 20px; }
-    </style>
+    <meta charset="UTF-8">
+    <title>Kripto Boto Panelė</title>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        body {
+            font-family: 'Segoe UI', sans-serif;
+            background: linear-gradient(to right, #1d2671, #c33764);
+            color: #fff;
+            margin: 0;
+            padding: 20px;
+        }
+        .container {
+            max-width: 1000px;
+            margin: auto;
+        }
+        h1 {
+            text-align: center;
+            margin-bottom: 30px;
+        }
+        form {
+            margin-bottom: 30px;
+            background: rgba(255,255,255,0.1);
+            padding: 20px;
+            border-radius: 10px;
+        }
+        label {
+            display: inline-block;
+            margin: 10px 0 5px;
+        }
+        input, select {
+            padding: 8px;
+            width: 100%;
+            border: none;
+            border-radius: 5px;
+            margin-bottom: 15px;
+        }
+        button {
+            padding: 10px 20px;
+            background-color: #2ecc71;
+            border: none;
+            border-radius: 5px;
+            color: white;
+            cursor: pointer;
+            font-weight: bold;
+        }
+        button:hover {
+            background-color: #27ae60;
+        }
+        table {
+            width: 100%;
+            margin-top: 20px;
+            border-collapse: collapse;
+            background: rgba(255,255,255,0.1);
+        }
+        th, td {
+            padding: 10px;
+            border-bottom: 1px solid #ccc;
+            text-align: center;
+        }
+        th {
+            background-color: #34495e;
+        }
+        canvas {
+            background: white;
+            margin-top: 30px;
+            border-radius: 10px;
+        }
+    </style>
 </head>
 <body>
+    <div class="container">
+        <h1>📊 Kripto Boto Panelė</h1>
+        <form method="POST" action="/update_settings">
+            <label for="pair_count">Porų kiekis:</label>
+            <input type="number" name="pair_count" value="{{ pair_count }}" min="1" max="100">
 
-{% if not session.get('user') %}
-    <h2>Prisijungimas</h2>
-    <form method="POST" action="{{ url_for('login') }}">
-        <label>Vartotojo vardas:</label><br>
-        <input type="text" name="username"><br><br>
-        <label>Slaptažodis:</label><br>
-        <input type="password" name="password"><br><br>
-        <button type="submit">Prisijungti</button>
-    </form>
-{% else %}
+            <label for="filters">Techniniai filtrai:</label>
+            <select name="filters" multiple>
+                {% for f in available_filters %}
+                    <option value="{{ f }}" {% if f in selected_filters %}selected{% endif %}>{{ f }}</option>
+                {% endfor %}
+            </select>
 
-<h2>AI Kripto Prekybos Panelė</h2>
+            <button type="submit">💾 Išsaugoti nustatymus</button>
+        </form>
 
-<form method="post" class="form-section" action="{{ url_for('index') }}">
-    <label>Porų kiekis (1–100):</label>
-    <input type="number" name="n_pairs" value="{{ settings['n_pairs'] }}" min="1" max="100" />
-    <br><br>
-    <label>Techninės analizės filtrai:</label><br>
-    {% for f in all_filters %}
-        <input type="checkbox" name="ta_filters" value="{{ f }}" {% if f in settings['ta_filters'] %}checked{% endif %}>{{ f }}
-    {% endfor %}
-    <br><br>
-    <button type="submit">💾 Išsaugoti nustatymus</button>
-    <a href="{{ url_for('start_bot') }}">▶️ Paleisti Botą</a>
-    <a href="{{ url_for('stop_bot') }}">⏹️ Stabdyti Botą</a>
-    <a href="{{ url_for('logout') }}">🚪 Atsijungti</a>
-</form>
+        <form method="POST" action="/toggle_bot">
+            {% if bot_running %}
+                <button type="submit" name="action" value="stop">⛔ Sustabdyti botą</button>
+            {% else %}
+                <button type="submit" name="action" value="start">▶️ Paleisti botą</button>
+            {% endif %}
+        </form>
 
-<h3>Boto būsena: <span style="color: green;">{{ bot_status }}</span></h3>
-<h4>Balansas: <span style="color: blue;">{{ balance }} USDT</span></h4>
+        <h2>💰 Balansas: {{ balance }} USDT</h2>
 
-<h3>Sandorių istorija</h3>
-<table>
-    <thead>
-        <tr>
-            <th>Laikas</th>
-            <th>Pora</th>
-            <th>Kryptis</th>
-            <th>Kaina</th>
-            <th>Pozicija (USDT)</th>
-        </tr>
-    </thead>
-    <tbody>
-        {% for t in trade_history %}
-        <tr>
-            <td>{{ t.laikas }}</td>
-            <td>{{ t.pora }}</td>
-            <td>{{ t.kryptis }}</td>
-            <td>{{ t.kaina }}</td>
-            <td>{{ t.pozicija }}</td>
-        </tr>
-        {% endfor %}
-    </tbody>
-</table>
+        <h2>📈 Sandoriai</h2>
+        <table>
+            <tr>
+                <th>Data</th>
+                <th>Pora</th>
+                <th>Tipas</th>
+                <th>Kaina</th>
+                <th>Rezultatas</th>
+            </tr>
+            {% for t in trades %}
+            <tr>
+                <td>{{ t.date }}</td>
+                <td>{{ t.symbol }}</td>
+                <td>{{ t.side }}</td>
+                <td>{{ t.price }}</td>
+                <td>{{ t.result }}</td>
+            </tr>
+            {% endfor %}
+        </table>
 
-<h3>Balanso grafikas</h3>
-<canvas id="balanceChart" width="800" height="300"></canvas>
-<script>
-    const ctx = document.getElementById('balanceChart').getContext('2d');
-    new Chart(ctx, {
-        type: 'line',
-        data: {
-            labels: {{ times|tojson }},
-            datasets: [{
-                label: 'Balansas (USDT)',
-                data: {{ graph|tojson }},
-                borderColor: 'blue',
-                borderWidth: 2,
-                fill: false
-            }]
-        },
-        options: {
-            responsive: true,
-            scales: {
-                y: { beginAtZero: false }
+        <h2>📊 Balanso grafikas</h2>
+        <canvas id="balanceChart" width="600" height="200"></canvas>
+    </div>
+
+    <script>
+        const ctx = document.getElementById('balanceChart').getContext('2d');
+        const balanceChart = new Chart(ctx, {
+            type: 'line',
+            data: {
+                labels: {{ chart_labels|safe }},
+                datasets: [{
+                    label: 'Balansas',
+                    data: {{ chart_data|safe }},
+                    borderColor: '#2ecc71',
+                    backgroundColor: 'rgba(46, 204, 113, 0.2)',
+                    borderWidth: 2,
+                    tension: 0.4,
+                    fill: true
+                }]
+            },
+            options: {
+                scales: {
+                    y: {
+                        beginAtZero: false
+                    }
+                }
             }
-        }
-    });
-</script>
-
-<h3>🔑 Keisti slaptažodį</h3>
-<form method="POST" action="{{ url_for('change_password') }}">
-    <label>Senas slaptažodis:</label><br>
-    <input type="password" name="old_password"><br><br>
-    <label>Naujas slaptažodis:</label><br>
-    <input type="password" name="new_password"><br><br>
-    <button type="submit">🔁 Pakeisti</button>
-</form>
-
-{% endif %}
-
+        });
+    </script>
 </body>
 </html>
