@@ -1,5 +1,5 @@
 from flask import Flask, render_template, request, redirect, url_for, session
-from datetime import timedelta
+from datetime import timedelta, datetime
 import threading
 import time
 import pandas as pd
@@ -10,17 +10,16 @@ from ta.volatility import BollingerBands, AverageTrueRange
 from ta.volume import OnBalanceVolumeIndicator
 
 app = Flask(__name__)
-app.secret_key = 'QwertghjkL123***'  # Pakeisk į saugų raktą!
+app.secret_key = 'Qwer*'
 app.permanent_session_lifetime = timedelta(minutes=60)
 
 # Vartotojai
-USERS = {"virglel@gmail.com": "QwertghjkL123***
-}
+USERS = {"@gmail.com": "QkL123***"}
 
 # Bybit API
 session_api = HTTP(
-    api_key="b2tL6abuyH7gEQjIC1",
-    api_secret="azEVdZmiRBlHID75zQehXHYYYKw0jB8DDFPJ",
+    api_key="b2tL6abu",
+    api_secret="azEVdZ",
     testnet=False,
 )
 
@@ -122,59 +121,7 @@ def calculate_qty(symbol):
     except Exception as e:
         print(f"⚠️ Kiekio klaida {symbol}: {e}")
         return 0.01
-
-def place_order(symbol, side):
-    try:
-        qty = calculate_qty(symbol)
-        session_api.place_order(
-            category="linear",
-            symbol=symbol,
-            side=side,
-            order_type="Market",
-            qty=qty,
-            time_in_force="GoodTillCancel",
-            reduce_only=False
-        )
-        price = float(session_api.get_ticker(category="linear", symbol=symbol)["result"]["list"][0]["lastPrice"])
-        trade_history.append({
-            "laikas": time.strftime("%Y-%m-%d %H:%M:%S"),
-            "pora": symbol,
-            "kryptis": side,
-            "kaina": price,
-            "pozicija": round(qty * price, 2)
-        })
-        balance_graph.append(balance_info()["balansas"])
-        balance_times.append(datetime.now().strftime("%H:%M"))
-        print(f"✅ Užsakymas: {symbol} - {side}")
-    except Exception as e:
-        print(f"❌ Užsakymo klaida {symbol}: {e}")
-
-def balance_info():
-    try:
-        bal = float(session_api.get_wallet_balance(accountType="UNIFIED")["result"]["list"][0]["totalEquity"])
-        return {"balansas": round(bal, 2)}
-    except:
-        return {"balansas": 0}
-
-# ------------------ Boto paleidimas -------------------
-
-def trading_loop():
-    global bot_status
-    while True:
-        if bot_status == "Veikia":
-            fetch_top_symbols()
-            for symbol in symbols:
-                df = get_klines(symbol)
-                if df is None or len(df) < 50:
-                    continue
-                score = apply_ta_filters(df)
-                now = time.time()
-                if score >= 3 and now - last_trade_time.get(symbol, 0) > settings["cooldown"] * 60:
-                    place_order(symbol, side="Buy")
-                    last_trade_time[symbol] = now
-        time.sleep(60)
-
-# ------------------ Web panelė -------------------
+        # ------------------ Web panelė -------------------
 
 @app.route("/", methods=["GET", "POST"])
 def index():
@@ -230,12 +177,61 @@ def change_password():
         USERS[user] = new
         return redirect(url_for("index"))
     return "<h3>Neteisingas senas slaptažodis.</h3>"
+    def place_order(symbol, side):
+    try:
+        qty = calculate_qty(symbol)
+        session_api.place_order(
+            category="linear",
+            symbol=symbol,
+            side=side,
+            order_type="Market",
+            qty=qty,
+            time_in_force="GoodTillCancel",
+            reduce_only=False
+        )
+        price = float(session_api.get_ticker(category="linear", symbol=symbol)["result"]["list"][0]["lastPrice"])
+        trade_history.append({
+            "laikas": time.strftime("%Y-%m-%d %H:%M:%S"),
+            "pora": symbol,
+            "kryptis": side,
+            "kaina": price,
+            "pozicija": round(qty * price, 2)
+        })
+        balance_graph.append(balance_info()["balansas"])
+        balance_times.append(datetime.now().strftime("%H:%M"))
+        print(f"✅ Užsakymas: {symbol} - {side}")
+    except Exception as e:
+        print(f"❌ Užsakymo klaida {symbol}: {e}")
 
-# ----------------------
+def balance_info():
+    try:
+        bal = float(session_api.get_wallet_balance(accountType="UNIFIED")["result"]["list"][0]["totalEquity"])
+        return {"balansas": round(bal, 2)}
+    except:
+        return {"balansas": 0}
+
+# ------------------ Boto paleidimas -------------------
+
+def trading_loop():
+    global bot_status
+    while True:
+        if bot_status == "Veikia":
+            fetch_top_symbols()
+            for symbol in symbols:
+                df = get_klines(symbol)
+                if df is None or len(df) < 50:
+                    continue
+                score = apply_ta_filters(df)
+                now = time.time()
+                if score >= 3 and now - last_trade_time.get(symbol, 0) > settings["cooldown"] * 60:
+                    place_order(symbol, side="Buy")
+                    last_trade_time[symbol] = now
+        time.sleep(60)
+
+# Automatinis boto paleidimas su serveriu
 @app.before_first_request
 def activate_bot():
     print("🔁 Boto ciklas paleistas")
     t = threading.Thread(target=trading_loop)
     t.daemon = True
     t.start()
-   
