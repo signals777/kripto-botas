@@ -13,7 +13,15 @@ app = Flask(__name__)
 app.secret_key = 'QwertghjkL123***'
 app.permanent_session_lifetime = timedelta(minutes=60)
 
+# Vartotojai
 USERS = {"virglel@gmail.com": "QwertghjkL123***"}
+
+# Bybit API
+session_api = HTTP(
+    api_key="b2tL6abuyH7gEQjIC1",
+    api_secret="azEVdZmiRBlHID75zQehXHYYYKw0jB8DDFPJ",
+    testnet=False,
+)
 
 # Nustatymai
 settings = {
@@ -33,26 +41,18 @@ balance_graph = []
 balance_times = []
 bot_status = "Sustabdyta"
 
-def get_session_api():
-    return HTTP(
-        api_key="b2tL6abuyH7gEQjIC1",
-        api_secret="azEVdZmiRBlHID75zQehXHYYYKw0jB8DDFPJ",
-        testnet=False,
-    )
-    def fetch_top_symbols():
+def fetch_top_symbols():
+    global symbols
     try:
-        session_api = get_session_api()
         response = session_api.get_tickers(category="linear")
         data = response.get("result", {}).get("list", [])
         usdt_pairs = [item["symbol"] for item in data if item["symbol"].endswith("USDT")]
-        global symbols
         symbols = usdt_pairs[:settings["n_pairs"]]
     except Exception as e:
         print("❌ Nepavyko gauti simbolių:", e)
 
 def get_klines(symbol, interval="15"):
     try:
-        session_api = get_session_api()
         klines = session_api.get_kline(category="linear", symbol=symbol, interval=interval, limit=100)
         data = klines['result']['list']
         df = pd.DataFrame(data, columns=[
@@ -71,51 +71,49 @@ def get_klines(symbol, interval="15"):
 def apply_ta_filters(df):
     score = 0
     try:
-        filtered = {}
-        for name in settings["ta_filters"]:
-            if name == "EMA":
-                ema5 = EMAIndicator(df["close"], window=5).ema_indicator()
-                ema20 = EMAIndicator(df["close"], window=20).ema_indicator()
-                if ema5.iloc[-1] > ema20.iloc[-1]: score += 1
-            elif name == "SMA":
-                sma5 = SMAIndicator(df["close"], window=5).sma_indicator()
-                sma20 = SMAIndicator(df["close"], window=20).sma_indicator()
-                if sma5.iloc[-1] > sma20.iloc[-1]: score += 1
-            elif name == "RSI":
-                rsi = RSIIndicator(df["close"]).rsi()
-                if rsi.iloc[-1] < 30: score += 1
-            elif name == "StochRSI":
-                stoch = StochasticOscillator(df["high"], df["low"], df["close"])
-                if stoch.stoch().iloc[-1] < 20: score += 1
-            elif name == "CCI":
-                cci = CCIIndicator(df["high"], df["low"], df["close"]).cci()
-                if cci.iloc[-1] < -100: score += 1
-            elif name == "BB":
-                bb = BollingerBands(df["close"])
-                if df["close"].iloc[-1] < bb.bollinger_lband().iloc[-1]: score += 1
-            elif name == "VWAP":
-                tp = (df["high"] + df["low"] + df["close"]) / 3
-                vwap = (tp * df["volume"]).cumsum() / df["volume"].cumsum()
-                if df["close"].iloc[-1] < vwap.iloc[-1]: score += 1
-            elif name == "Volume":
-                obv = OnBalanceVolumeIndicator(df["close"], df["volume"]).on_balance_volume()
-                if obv.iloc[-1] > obv.iloc[-2]: score += 1
-            elif name == "ATR":
-                atr = AverageTrueRange(df["high"], df["low"], df["close"]).average_true_range()
-                if atr.iloc[-1] > atr.iloc[-2]: score += 1
-            elif name == "AI":
-                ema5 = EMAIndicator(df["close"], window=5).ema_indicator()
-                ema20 = EMAIndicator(df["close"], window=20).ema_indicator()
-                rsi = RSIIndicator(df["close"]).rsi()
-                if ema5.iloc[-1] > ema20.iloc[-1] and rsi.iloc[-1] < 35: score += 1
+        if "EMA" in settings["ta_filters"]:
+            ema_fast = EMAIndicator(df["close"], window=5).ema_indicator()
+            ema_slow = EMAIndicator(df["close"], window=20).ema_indicator()
+            if ema_fast.iloc[-1] > ema_slow.iloc[-1]: score += 1
+        if "SMA" in settings["ta_filters"]:
+            sma_fast = SMAIndicator(df["close"], window=5).sma_indicator()
+            sma_slow = SMAIndicator(df["close"], window=20).sma_indicator()
+            if sma_fast.iloc[-1] > sma_slow.iloc[-1]: score += 1
+        if "RSI" in settings["ta_filters"]:
+            rsi = RSIIndicator(df["close"]).rsi()
+            if rsi.iloc[-1] < 30: score += 1
+        if "StochRSI" in settings["ta_filters"]:
+            stoch = StochasticOscillator(df["high"], df["low"], df["close"])
+            if stoch.stoch().iloc[-1] < 20: score += 1
+        if "CCI" in settings["ta_filters"]:
+            cci = CCIIndicator(df["high"], df["low"], df["close"]).cci()
+            if cci.iloc[-1] < -100: score += 1
+        if "BB" in settings["ta_filters"]:
+            bb = BollingerBands(df["close"])
+            if df["close"].iloc[-1] < bb.bollinger_lband().iloc[-1]: score += 1
+        if "VWAP" in settings["ta_filters"]:
+            tp = (df["high"] + df["low"] + df["close"]) / 3
+            vwap = (tp * df["volume"]).cumsum() / df["volume"].cumsum()
+            if df["close"].iloc[-1] < vwap.iloc[-1]: score += 1
+        if "Volume" in settings["ta_filters"]:
+            obv = OnBalanceVolumeIndicator(df["close"], df["volume"]).on_balance_volume()
+            if obv.iloc[-1] > obv.iloc[-2]: score += 1
+        if "ATR" in settings["ta_filters"]:
+            atr = AverageTrueRange(df["high"], df["low"], df["close"]).average_true_range()
+            if atr.iloc[-1] > atr.iloc[-2]: score += 1
+        if "AI" in settings["ta_filters"]:
+            ema5 = EMAIndicator(df["close"], window=5).ema_indicator()
+            ema20 = EMAIndicator(df["close"], window=20).ema_indicator()
+            rsi = RSIIndicator(df["close"]).rsi()
+            if ema5.iloc[-1] > ema20.iloc[-1] and rsi.iloc[-1] < 35: score += 1
     except Exception as e:
         print("⚠️ TA klaida:", e)
     return score
-    def calculate_qty(symbol):
+
+def calculate_qty(symbol):
     try:
-        session_api = get_session_api()
-        balance = session_api.get_wallet_balance(accountType="UNIFIED")
-        usdt = float(balance["result"]["list"][0]["totalEquity"])
+        balance_info = session_api.get_wallet_balance(accountType="UNIFIED")
+        usdt = float(balance_info["result"]["list"][0]["totalEquity"])
         amount = usdt * settings["position_size_pct"] / 100
         price = float(session_api.get_ticker(category="linear", symbol=symbol)["result"]["list"][0]["lastPrice"])
         qty = round((amount * settings["leverage"]) / price, 3)
@@ -126,7 +124,6 @@ def apply_ta_filters(df):
 
 def place_order(symbol, side):
     try:
-        session_api = get_session_api()
         qty = calculate_qty(symbol)
         session_api.place_order(
             category="linear",
@@ -153,13 +150,10 @@ def place_order(symbol, side):
 
 def balance_info():
     try:
-        session_api = get_session_api()
         bal = float(session_api.get_wallet_balance(accountType="UNIFIED")["result"]["list"][0]["totalEquity"])
         return {"balansas": round(bal, 2)}
     except:
         return {"balansas": 0}
-
-# ------------------ Boto paleidimas -------------------
 
 def trading_loop():
     global bot_status
@@ -176,8 +170,6 @@ def trading_loop():
                     place_order(symbol, side="Buy")
                     last_trade_time[symbol] = now
         time.sleep(60)
-
-# ------------------ Web panelė -------------------
 
 @app.route("/", methods=["GET", "POST"])
 def index():
@@ -234,10 +226,10 @@ def change_password():
         return redirect(url_for("index"))
     return "<h3>Neteisingas senas slaptažodis.</h3>"
 
-# Automatinis boto paleidimas su serverio startu
-@app.before_first_request
-def activate_bot():
+# Boto automatinis paleidimas be Gunicorn
+if __name__ == "__main__":
     print("🔁 Boto ciklas paleistas")
     t = threading.Thread(target=trading_loop)
     t.daemon = True
     t.start()
+    app.run(host="0.0.0.0", port=8000)
