@@ -1,4 +1,4 @@
-from flask import Flask, render_template, request, redirect, url_for, session
+iiifrom flask import Flask, render_template, request, redirect, url_for, session
 from datetime import timedelta, datetime
 import threading
 import time
@@ -192,4 +192,5 @@ if __name__ == "__main__":
     t = threading.Thread(target=trading_loop)
     t.daemon = True
     t.start()
-    app.run(host="0.0.0.0", port=8000)
+    port = int(os.environ.get("PORT", 8000))  # Railway suteikia dinaminį PORT
+    app.run(host="0.0.0.0", port=port)
