@@ -10,16 +10,16 @@ from ta.volatility import BollingerBands, AverageTrueRange
 from ta.volume import OnBalanceVolumeIndicator
 
 app = Flask(__name__)
-app.secret_key = 'Qwer*'
+app.secret_key = 'QwertghjkL123***'
 app.permanent_session_lifetime = timedelta(minutes=60)
 
 # Vartotojai
-USERS = {"@gmail.com": "QkL123***"}
+USERS = {"virglel@gmail.com": "QwertghjkL123***"}
 
 # Bybit API
 session_api = HTTP(
-    api_key="b2tL6abu",
-    api_secret="azEVdZ",
+    api_key="b2tL6abuyH7gEQjIC1",
+    api_secret="azEVdZmiRBlHID75zQehXHYYYKw0jB8DDFPJ",
     testnet=False,
 )
 
