@@ -228,10 +228,8 @@ def trading_loop():
                     last_trade_time[symbol] = now
         time.sleep(60)
 
-# Automatinis boto paleidimas su serveriu
-@app.before_first_request
-def activate_bot():
-    print("🔁 Boto ciklas paleistas")
-    t = threading.Thread(target=trading_loop)
-    t.daemon = True
-    t.start()
+# Paleidžiamas botas automatiškai, kai startuoja serveris
+t = threading.Thread(target=trading_loop)
+t.daemon = True
+t.start()
+print("🔁 Boto ciklas paleistas")
