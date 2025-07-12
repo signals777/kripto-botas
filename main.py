@@ -41,90 +41,22 @@ balance_graph = []
 balance_times = []
 bot_status = "Sustabdyta"
 
-def fetch_top_symbols():
-    global symbols
-    try:
-        response = session_api.get_tickers(category="linear")
-        data = response.get("result", {}).get("list", [])
-        usdt_pairs = [item["symbol"] for item in data if item["symbol"].endswith("USDT")]
-        symbols = usdt_pairs[:settings["n_pairs"]]
-    except Exception as e:
-        print("❌ Nepavyko gauti simbolių:", e)
-
-def get_klines(symbol, interval="15"):
-    try:
-        klines = session_api.get_kline(category="linear", symbol=symbol, interval=interval, limit=100)
-        data = klines['result']['list']
-        df = pd.DataFrame(data, columns=[
-            "timestamp", "open", "high", "low", "close", "volume",
-            "", "", "", "", "", ""
-        ])
-        df["close"] = df["close"].astype(float)
-        df["high"] = df["high"].astype(float)
-        df["low"] = df["low"].astype(float)
-        df["volume"] = df["volume"].astype(float)
-        return df
-    except Exception as e:
-        print(f"❌ Klines klaida {symbol}: {e}")
-        return None
-
-def apply_ta_filters(df):
-    score = 0
-    try:
-        if "EMA" in settings["ta_filters"]:
-            ema_fast = EMAIndicator(df["close"], window=5).ema_indicator()
-            ema_slow = EMAIndicator(df["close"], window=20).ema_indicator()
-            if ema_fast.iloc[-1] > ema_slow.iloc[-1]: score += 1
-        if "SMA" in settings["ta_filters"]:
-            sma_fast = SMAIndicator(df["close"], window=5).sma_indicator()
-            sma_slow = SMAIndicator(df["close"], window=20).sma_indicator()
-            if sma_fast.iloc[-1] > sma_slow.iloc[-1]: score += 1
-        if "RSI" in settings["ta_filters"]:
-            rsi = RSIIndicator(df["close"]).rsi()
-            if rsi.iloc[-1] < 30: score += 1
-        if "StochRSI" in settings["ta_filters"]:
-            stoch = StochasticOscillator(df["high"], df["low"], df["close"])
-            if stoch.stoch().iloc[-1] < 20: score += 1
-        if "CCI" in settings["ta_filters"]:
-            cci = CCIIndicator(df["high"], df["low"], df["close"]).cci()
-            if cci.iloc[-1] < -100: score += 1
-        if "BB" in settings["ta_filters"]:
-            bb = BollingerBands(df["close"])
-            if df["close"].iloc[-1] < bb.bollinger_lband().iloc[-1]: score += 1
-        if "VWAP" in settings["ta_filters"]:
-            tp = (df["high"] + df["low"] + df["close"]) / 3
-            vwap = (tp * df["volume"]).cumsum() / df["volume"].cumsum()
-            if df["close"].iloc[-1] < vwap.iloc[-1]: score += 1
-        if "Volume" in settings["ta_filters"]:
-            obv = OnBalanceVolumeIndicator(df["close"], df["volume"]).on_balance_volume()
-            if obv.iloc[-1] > obv.iloc[-2]: score += 1
-        if "ATR" in settings["ta_filters"]:
-            atr = AverageTrueRange(df["high"], df["low"], df["close"]).average_true_range()
-            if atr.iloc[-1] > atr.iloc[-2]: score += 1
-        if "AI" in settings["ta_filters"]:
-            ema5 = EMAIndicator(df["close"], window=5).ema_indicator()
-            ema20 = EMAIndicator(df["close"], window=20).ema_indicator()
-            rsi = RSIIndicator(df["close"]).rsi()
-            if ema5.iloc[-1] > ema20.iloc[-1] and rsi.iloc[-1] < 35: score += 1
-    except Exception as e:
-        print("⚠️ TA klaida:", e)
-    return score
-
+# Pagalbinės funkcijos
 def calculate_qty(symbol):
-    try:
-        balance_info = session_api.get_wallet_balance(accountType="UNIFIED")
-        usdt = float(balance_info["result"]["list"][0]["totalEquity"])
-        amount = usdt * settings["position_size_pct"] / 100
-        price = float(session_api.get_ticker(category="linear", symbol=symbol)["result"]["list"][0]["lastPrice"])
-        qty = round((amount * settings["leverage"]) / price, 3)
-        return qty
-    except Exception as e:
-        print(f"⚠️ Kiekio klaida {symbol}: {e}")
-        return 0.01
+    balance = balance_info()["balansas"]
+    price = float(session_api.get_ticker(category="linear", symbol=symbol)["result"]["list"][0]["lastPrice"])
+    position_value = balance * (settings["position_size_pct"] / 100)
+    return round((position_value * settings["leverage"]) / price, 3)
 
 def place_order(symbol, side):
     try:
         qty = calculate_qty(symbol)
+        ticker = session_api.get_ticker(category="linear", symbol=symbol)
+        entry_price = float(ticker["result"]["list"][0]["lastPrice"])
+
+        tp_price = round(entry_price * (1 + settings["take_profit"]), 2)
+        sl_price = round(entry_price * (1 - settings["stop_loss"]), 2)
+
         session_api.place_order(
             category="linear",
             symbol=symbol,
@@ -134,13 +66,39 @@ def place_order(symbol, side):
             time_in_force="GoodTillCancel",
             reduce_only=False
         )
-        price = float(session_api.get_ticker(category="linear", symbol=symbol)["result"]["list"][0]["lastPrice"])
+
+        # Take Profit
+        session_api.place_order(
+            category="linear",
+            symbol=symbol,
+            side="Sell" if side == "Buy" else "Buy",
+            order_type="Limit",
+            qty=qty,
+            price=str(tp_price),
+            time_in_force="GoodTillCancel",
+            reduce_only=True
+        )
+
+        # Stop Loss
+        session_api.place_order(
+            category="linear",
+            symbol=symbol,
+            side="Sell" if side == "Buy" else "Buy",
+            order_type="StopMarket",
+            qty=qty,
+            stop_loss=str(sl_price),
+            trigger_price=str(sl_price),
+            trigger_by="LastPrice",
+            time_in_force="GoodTillCancel",
+            reduce_only=True
+        )
+
         trade_history.append({
             "laikas": time.strftime("%Y-%m-%d %H:%M:%S"),
             "pora": symbol,
             "kryptis": side,
-            "kaina": price,
-            "pozicija": round(qty * price, 2)
+            "kaina": entry_price,
+            "pozicija": round(qty * entry_price, 2)
         })
         balance_graph.append(balance_info()["balansas"])
         balance_times.append(datetime.now().strftime("%H:%M"))
@@ -155,22 +113,7 @@ def balance_info():
     except:
         return {"balansas": 0}
 
-def trading_loop():
-    global bot_status
-    while True:
-        if bot_status == "Veikia":
-            fetch_top_symbols()
-            for symbol in symbols:
-                df = get_klines(symbol)
-                if df is None or len(df) < 50:
-                    continue
-                score = apply_ta_filters(df)
-                now = time.time()
-                if score >= 3 and now - last_trade_time.get(symbol, 0) > settings["cooldown"] * 60:
-                    place_order(symbol, side="Buy")
-                    last_trade_time[symbol] = now
-        time.sleep(60)
-
+# Web panelė
 @app.route("/", methods=["GET", "POST"])
 def index():
     if "user" not in session:
@@ -226,7 +169,24 @@ def change_password():
         return redirect(url_for("index"))
     return "<h3>Neteisingas senas slaptažodis.</h3>"
 
-# Boto automatinis paleidimas be Gunicorn
+# Boto ciklas
+def trading_loop():
+    global bot_status
+    while True:
+        if bot_status == "Veikia":
+            fetch_top_symbols()
+            for symbol in symbols:
+                df = get_klines(symbol)
+                if df is None or len(df) < 50:
+                    continue
+                score = apply_ta_filters(df)
+                now = time.time()
+                if score >= 3 and now - last_trade_time.get(symbol, 0) > settings["cooldown"] * 60:
+                    place_order(symbol, side="Buy")
+                    last_trade_time[symbol] = now
+        time.sleep(60)
+
+# Automatinis paleidimas be Gunicorn
 if __name__ == "__main__":
     print("🔁 Boto ciklas paleistas")
     t = threading.Thread(target=trading_loop)
