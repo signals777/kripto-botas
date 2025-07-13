@@ -38,7 +38,6 @@ trade_history = []
 balance_graph = []
 balance_times = []
 bot_status = "Sustabdyta"
-
 def get_klines(symbol):
     try:
         klines = session_api.get_kline(
@@ -111,43 +110,47 @@ def apply_ta_filters(df):
 def fetch_top_symbols():
     global symbols
     try:
-        data = session_api.get_tickers(category="linear")
-        tickers = data["result"]["list"]
-        sorted_tickers = sorted(tickers, key=lambda x: float(x["volume24h"]), reverse=True)
+        data = session_api.get_instruments(category="linear")["result"]["list"]
+        valid = []
+        for item in data:
+            if not all(k in item for k in ["symbol", "lotSizeFilter", "priceFilter"]):
+                continue
+            if "minOrderQty" in item["lotSizeFilter"] and "qtyStep" in item["lotSizeFilter"]:
+                min_qty = float(item["lotSizeFilter"]["minOrderQty"])
+                step = float(item["lotSizeFilter"]["qtyStep"])
+                if min_qty > 0 and step > 0:
+                    valid.append(item["symbol"])
+        ticker_data = session_api.get_tickers(category="linear")["result"]["list"]
+        filtered = [t for t in ticker_data if t["symbol"] in valid]
+        sorted_tickers = sorted(filtered, key=lambda x: float(x["volume24h"]), reverse=True)
         symbols = [t["symbol"] for t in sorted_tickers[:settings["n_pairs"]]]
     except Exception as e:
         print(f"Klaida fetch_top_symbols: {e}")
         symbols = []
-
-def calculate_qty(symbol):
+        def calculate_qty(symbol):
     balance = balance_info()["balansas"]
     try:
-        instruments = session_api.get_instruments_info(category="linear")["result"]["list"]
-        instrument = next((item for item in instruments if item["symbol"] == symbol), None)
-        if instrument is None:
+        tickers = session_api.get_tickers(category="linear")["result"]["list"]
+        price_data = next((item for item in tickers if item["symbol"] == symbol), None)
+        if price_data is None or "lastPrice" not in price_data:
             raise Exception(f"Nerasta informacija apie instrumentą {symbol}")
-
-        price = float(instrument["lastPrice"])
-        qty_step = float(instrument["lotSizeFilter"]["qtyStep"])
-        min_qty = float(instrument["lotSizeFilter"]["minOrderQty"])
-
-        position_value = balance * (settings["position_size_pct"] / 100)
-        raw_qty = (position_value * settings["leverage"]) / price
-        qty = max(raw_qty, min_qty)
-
-        precision = len(str(qty_step).split(".")[1]) if "." in str(qty_step) else 0
-        return round(qty, precision)
-
+        price = float(price_data["lastPrice"])
     except Exception as e:
         print(f"❌ Klaida skaičiuojant kiekį {symbol}: {e}")
         return 0
 
+    position_value = balance * (settings["position_size_pct"] / 100)
+    qty = (position_value * settings["leverage"]) / price
+    return round(qty, 3)
+
 def place_order(symbol, side):
     try:
         qty = calculate_qty(symbol)
+        if qty <= 0:
+            raise Exception("Apskaičiuotas kiekis yra 0")
         price_data = session_api.get_tickers(category="linear")["result"]["list"]
         entry_data = next((item for item in price_data if item["symbol"] == symbol), None)
-        if entry_data is None:
+        if entry_data is None or "lastPrice" not in entry_data:
             raise Exception("Nepavyko gauti kainos")
         entry_price = float(entry_data["lastPrice"])
 
@@ -224,8 +227,7 @@ def index():
         graph=balance_graph,
         times=balance_times
     )
-
-@app.route("/login", methods=["POST", "GET"])
+    @app.route("/login", methods=["POST", "GET"])
 def login():
     if request.method == "POST":
         user = request.form["username"]
