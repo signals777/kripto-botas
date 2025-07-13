@@ -1,150 +1,142 @@
 <!DOCTYPE html>
-<html lang="lt">
+<html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>Kripto Boto Panelė</title>
+    <title>Prekybos Panelė</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-    <style>
-        body {
-            font-family: 'Segoe UI', sans-serif;
-            background: linear-gradient(to right, #1d2671, #c33764);
-            color: #fff;
-            margin: 0;
-            padding: 20px;
-        }
-        .container {
-            max-width: 1000px;
-            margin: auto;
-        }
-        h1 {
-            text-align: center;
-            margin-bottom: 30px;
-        }
-        form {
-            margin-bottom: 30px;
-            background: rgba(255,255,255,0.1);
-            padding: 20px;
-            border-radius: 10px;
-        }
-        label {
-            display: inline-block;
-            margin: 10px 0 5px;
-        }
-        input, select {
-            padding: 8px;
-            width: 100%;
-            border: none;
-            border-radius: 5px;
-            margin-bottom: 15px;
-        }
-        button {
-            padding: 10px 20px;
-            background-color: #2ecc71;
-            border: none;
-            border-radius: 5px;
-            color: white;
-            cursor: pointer;
-            font-weight: bold;
-        }
-        button:hover {
-            background-color: #27ae60;
-        }
-        table {
-            width: 100%;
-            margin-top: 20px;
-            border-collapse: collapse;
-            background: rgba(255,255,255,0.1);
-        }
-        th, td {
-            padding: 10px;
-            border-bottom: 1px solid #ccc;
-            text-align: center;
-        }
-        th {
-            background-color: #34495e;
-        }
-        canvas {
-            background: white;
-            margin-top: 30px;
-            border-radius: 10px;
-        }
-    </style>
 </head>
-<body>
-    <div class="container">
-        <h1>📊 Kripto Boto Panelė</h1>
-        <form method="POST" action="/update_settings">
-            <label for="pair_count">Porų kiekis:</label>
-            <input type="number" name="pair_count" value="{{ pair_count }}" min="1" max="100">
+<body class="bg-dark text-white">
+<div class="container mt-5">
 
-            <label for="filters">Techniniai filtrai:</label>
-            <select name="filters" multiple>
-                {% for f in available_filters %}
-                    <option value="{{ f }}" {% if f in selected_filters %}selected{% endif %}>{{ f }}</option>
+    {% if session['user'] %}
+        <h2 class="text-info">Sveiki, {{ session['user'] }}!</h2>
+        <div class="mb-3">
+            <a href="/logout" class="btn btn-outline-warning">Atsijungti</a>
+        </div>
+
+        <form method="post" action="/">
+            <div class="mb-3">
+                <label for="n_pairs" class="form-label">Porų skaičius</label>
+                <input type="number" class="form-control" id="n_pairs" name="n_pairs" value="{{ settings['n_pairs'] }}">
+            </div>
+
+            <div class="mb-3">
+                <label class="form-label">Techniniai filtrai</label><br>
+                {% for f in all_filters %}
+                    <div class="form-check form-check-inline">
+                        <input class="form-check-input" type="checkbox" name="ta_filters" value="{{ f }}" {% if f in settings['ta_filters'] %}checked{% endif %}>
+                        <label class="form-check-label text-light">{{ f }}</label>
+                    </div>
                 {% endfor %}
-            </select>
+            </div>
 
-            <button type="submit">💾 Išsaugoti nustatymus</button>
+            <button type="submit" class="btn btn-success">Atnaujinti nustatymus</button>
         </form>
 
-        <form method="POST" action="/toggle_bot">
-            {% if bot_running %}
-                <button type="submit" name="action" value="stop">⛔ Sustabdyti botą</button>
-            {% else %}
-                <button type="submit" name="action" value="start">▶️ Paleisti botą</button>
-            {% endif %}
-        </form>
+        <hr class="border-light">
 
-        <h2>💰 Balansas: {{ balance }} USDT</h2>
+        <div class="d-flex justify-content-between align-items-center my-3">
+            <h4>Boto būsena: 
+                {% if bot_status == 'Veikia' %}
+                    <span class="badge bg-success">Veikia</span>
+                {% else %}
+                    <span class="badge bg-danger">Sustabdyta</span>
+                {% endif %}
+            </h4>
+            <div>
+                <a href="/start" class="btn btn-primary">Start</a>
+                <a href="/stop" class="btn btn-danger">Stop</a>
+            </div>
+        </div>
 
-        <h2>📈 Sandoriai</h2>
-        <table>
-            <tr>
-                <th>Data</th>
-                <th>Pora</th>
-                <th>Tipas</th>
-                <th>Kaina</th>
-                <th>Rezultatas</th>
-            </tr>
-            {% for t in trades %}
-            <tr>
-                <td>{{ t.date }}</td>
-                <td>{{ t.symbol }}</td>
-                <td>{{ t.side }}</td>
-                <td>{{ t.price }}</td>
-                <td>{{ t.result }}</td>
-            </tr>
-            {% endfor %}
-        </table>
+        <div class="mb-3">
+            <h5>Balansas: <span class="text-info">{{ balance }} USDT</span></h5>
+        </div>
 
-        <h2>📊 Balanso grafikas</h2>
-        <canvas id="balanceChart" width="600" height="200"></canvas>
-    </div>
-
-    <script>
-        const ctx = document.getElementById('balanceChart').getContext('2d');
-        const balanceChart = new Chart(ctx, {
-            type: 'line',
-            data: {
-                labels: {{ chart_labels|safe }},
-                datasets: [{
-                    label: 'Balansas',
-                    data: {{ chart_data|safe }},
-                    borderColor: '#2ecc71',
-                    backgroundColor: 'rgba(46, 204, 113, 0.2)',
-                    borderWidth: 2,
-                    tension: 0.4,
-                    fill: true
-                }]
-            },
-            options: {
-                scales: {
-                    y: {
-                        beginAtZero: false
+        <canvas id="balanceChart" height="80"></canvas>
+        <script>
+            const ctx = document.getElementById('balanceChart');
+            new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: {{ times|tojson }},
+                    datasets: [{
+                        label: 'Balanso pokytis',
+                        data: {{ graph|tojson }},
+                        borderWidth: 2,
+                        fill: true,
+                        borderColor: 'rgb(75, 192, 192)',
+                        backgroundColor: 'rgba(75, 192, 192, 0.2)',
+                        tension: 0.2
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    scales: {
+                        y: { beginAtZero: false },
+                        x: { ticks: { color: "#ccc" } }
                     }
                 }
-            }
-        });
-    </script>
+            });
+        </script>
+
+        <hr class="border-light">
+        <h4 class="mt-4">Paskutiniai sandoriai</h4>
+        <table class="table table-dark table-striped">
+            <thead>
+            <tr>
+                <th>Laikas</th>
+                <th>Pora</th>
+                <th>Kryptis</th>
+                <th>Kaina</th>
+                <th>Pozicija</th>
+            </tr>
+            </thead>
+            <tbody>
+            {% for t in trade_history %}
+                <tr>
+                    <td>{{ t.laikas }}</td>
+                    <td>{{ t.pora }}</td>
+                    <td>{{ t.kryptis }}</td>
+                    <td>{{ t.kaina }}</td>
+                    <td>{{ t.pozicija }}</td>
+                </tr>
+            {% endfor %}
+            </tbody>
+        </table>
+
+        <hr class="border-light">
+
+        <form method="post" action="/change_password">
+            <h5>Slaptažodžio keitimas</h5>
+            <div class="row mb-3">
+                <div class="col">
+                    <input class="form-control" name="old_password" type="password" placeholder="Senas slaptažodis">
+                </div>
+                <div class="col">
+                    <input class="form-control" name="new_password" type="password" placeholder="Naujas slaptažodis">
+                </div>
+                <div class="col-auto">
+                    <button class="btn btn-outline-light">Keisti</button>
+                </div>
+            </div>
+        </form>
+    {% else %}
+        <h3 class="text-light mb-3">Prisijungimas</h3>
+        <form method="post" action="/login" class="bg-secondary p-4 rounded shadow">
+            <div class="mb-3">
+                <label for="username" class="form-label">El. paštas</label>
+                <input class="form-control" type="text" name="username" required>
+            </div>
+            <div class="mb-3">
+                <label for="password" class="form-label">Slaptažodis</label>
+                <input class="form-control" type="password" name="password" required>
+            </div>
+            <button class="btn btn-light">Prisijungti</button>
+        </form>
+    {% endif %}
+
+</div>
 </body>
 </html>
