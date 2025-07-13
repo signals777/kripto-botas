@@ -38,6 +38,7 @@ trade_history = []
 balance_graph = []
 balance_times = []
 bot_status = "Sustabdyta"
+
 def get_klines(symbol):
     try:
         klines = session_api.get_kline(
@@ -66,45 +67,36 @@ def apply_ta_filters(df):
         ema = EMAIndicator(close, window=20).ema_indicator()
         if close.iloc[-1] > ema.iloc[-1]:
             score += 1
-
     if "RSI" in settings["ta_filters"]:
         rsi = RSIIndicator(close, window=14).rsi()
         if rsi.iloc[-1] < 30:
             score += 1
-
     if "BB" in settings["ta_filters"]:
         bb = BollingerBands(close, window=20)
         if close.iloc[-1] < bb.bollinger_lband().iloc[-1]:
             score += 1
-
     if "StochRSI" in settings["ta_filters"]:
         stoch = StochasticOscillator(close, close, close)
         if stoch.stoch().iloc[-1] < 20:
             score += 1
-
     if "CCI" in settings["ta_filters"]:
         cci = CCIIndicator(close, close, close, window=20)
         if cci.cci().iloc[-1] < -100:
             score += 1
-
     if "SMA" in settings["ta_filters"]:
         sma = SMAIndicator(close, window=50).sma_indicator()
         if close.iloc[-1] > sma.iloc[-1]:
             score += 1
-
     if "Volume" in settings["ta_filters"]:
         vol_avg = volume.rolling(20).mean()
         if volume.iloc[-1] > vol_avg.iloc[-1]:
             score += 1
-
     if "ATR" in settings["ta_filters"]:
         atr = AverageTrueRange(high=close, low=close, close=close).average_true_range()
         if atr.iloc[-1] > atr.mean():
             score += 1
-
     if "AI" in settings["ta_filters"]:
         score += 0
-
     return score
 
 def fetch_top_symbols():
@@ -127,13 +119,21 @@ def fetch_top_symbols():
     except Exception as e:
         print(f"Klaida fetch_top_symbols: {e}")
         symbols = []
-        def calculate_qty(symbol):
+
+def calculate_qty(symbol):
     balance = balance_info()["balansas"]
     try:
+        instruments = session_api.get_instruments(category="linear")["result"]["list"]
+        instr = next((x for x in instruments if x["symbol"] == symbol), None)
+        if not instr:
+            raise Exception(f"Nerasta instrumentų info {symbol}")
+        min_qty = float(instr["lotSizeFilter"]["minOrderQty"])
+        qty_step = float(instr["lotSizeFilter"]["qtyStep"])
+
         tickers = session_api.get_tickers(category="linear")["result"]["list"]
         price_data = next((item for item in tickers if item["symbol"] == symbol), None)
         if price_data is None or "lastPrice" not in price_data:
-            raise Exception(f"Nerasta informacija apie instrumentą {symbol}")
+            raise Exception(f"Nerasta kaina {symbol}")
         price = float(price_data["lastPrice"])
     except Exception as e:
         print(f"❌ Klaida skaičiuojant kiekį {symbol}: {e}")
@@ -141,7 +141,13 @@ def fetch_top_symbols():
 
     position_value = balance * (settings["position_size_pct"] / 100)
     qty = (position_value * settings["leverage"]) / price
-    return round(qty, 3)
+
+    if qty < min_qty:
+        return 0
+
+    steps = round(qty / qty_step)
+    final_qty = steps * qty_step
+    return round(final_qty, 6)
 
 def place_order(symbol, side):
     try:
@@ -227,7 +233,8 @@ def index():
         graph=balance_graph,
         times=balance_times
     )
-    @app.route("/login", methods=["POST", "GET"])
+
+@app.route("/login", methods=["POST", "GET"])
 def login():
     if request.method == "POST":
         user = request.form["username"]
