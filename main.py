@@ -122,17 +122,25 @@ def fetch_top_symbols():
 def calculate_qty(symbol):
     balance = balance_info()["balansas"]
     try:
-        tickers = session_api.get_tickers(category="linear")["result"]["list"]
-        price_data = next((item for item in tickers if item["symbol"] == symbol), None)
-        if price_data is None:
-            raise Exception(f"Kaina nerasta simboliui {symbol}")
-        price = float(price_data["lastPrice"])
-    except Exception as e:
-        print(f"❌ Klaida gaunant kainą {symbol}: {e}")
-        return 0
+        instruments = session_api.get_instruments_info(category="linear")["result"]["list"]
+        instrument = next((item for item in instruments if item["symbol"] == symbol), None)
+        if instrument is None:
+            raise Exception(f"Nerasta informacija apie instrumentą {symbol}")
 
-    position_value = balance * (settings["position_size_pct"] / 100)
-    return round((position_value * settings["leverage"]) / price, 3)
+        price = float(instrument["lastPrice"])
+        qty_step = float(instrument["lotSizeFilter"]["qtyStep"])
+        min_qty = float(instrument["lotSizeFilter"]["minOrderQty"])
+
+        position_value = balance * (settings["position_size_pct"] / 100)
+        raw_qty = (position_value * settings["leverage"]) / price
+        qty = max(raw_qty, min_qty)
+
+        precision = len(str(qty_step).split(".")[1]) if "." in str(qty_step) else 0
+        return round(qty, precision)
+
+    except Exception as e:
+        print(f"❌ Klaida skaičiuojant kiekį {symbol}: {e}")
+        return 0
 
 def place_order(symbol, side):
     try:
