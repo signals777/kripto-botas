@@ -55,77 +55,21 @@ def get_klines(symbol):
         df["volume"] = df["volume"].astype(float)
         return df
     except Exception as e:
-        print(f"Klaida gaunant klines {symbol}: {e}")
-        return None
-
-def apply_ta_filters(df):
-    score = 0
-    close = df["close"]
-    volume = df["volume"]
-
-    if "EMA" in settings["ta_filters"]:
-        ema = EMAIndicator(close, window=20).ema_indicator()
-        if close.iloc[-1] > ema.iloc[-1]:
-            score += 1
-
-    if "RSI" in settings["ta_filters"]:
-        rsi = RSIIndicator(close, window=14).rsi()
-        if rsi.iloc[-1] < 30:
-            score += 1
-
-    if "BB" in settings["ta_filters"]:
-        bb = BollingerBands(close, window=20)
-        if close.iloc[-1] < bb.bollinger_lband().iloc[-1]:
-            score += 1
-
-    if "StochRSI" in settings["ta_filters"]:
-        stoch = StochasticOscillator(close, close, close)
-        if stoch.stoch().iloc[-1] < 20:
-            score += 1
-
-    if "CCI" in settings["ta_filters"]:
-        cci = CCIIndicator(close, close, close, window=20)
-        if cci.cci().iloc[-1] < -100:
-            score += 1
-
-    if "SMA" in settings["ta_filters"]:
-        sma = SMAIndicator(close, window=50).sma_indicator()
-        if close.iloc[-1] > sma.iloc[-1]:
-            score += 1
-
-    if "Volume" in settings["ta_filters"]:
-        vol_avg = volume.rolling(20).mean()
-        if volume.iloc[-1] > vol_avg.iloc[-1]:
-            score += 1
-
-    if "ATR" in settings["ta_filters"]:
-        atr = AverageTrueRange(high=close, low=close, close=close).average_true_range()
-        if atr.iloc[-1] > atr.mean():
-            score += 1
-
-    # AI / LSTM galima pridėti vėliau – čia kol kas palikta vieta
-    if "AI" in settings["ta_filters"]:
-        score += 0  # būsimas AI modelis
-
-    return score
-
-def fetch_top_symbols():
-    global symbols
-    try:
-        data = session_api.get_tickers(category="linear")
-        tickers = data["result"]["list"]
-        sorted_tickers = sorted(tickers, key=lambda x: float(x["volume24h"]), reverse=True)
-        symbols = [t["symbol"] for t in sorted_tickers[:settings["n_pairs"]]]
-    except Exception as e:
-        print(f"Klaida fetch_top_symbols: {e}")
-        symbols = []
-
-def calculate_qty(symbol):
+        def calculate_qty(symbol):
     balance = balance_info()["balansas"]
-    price = float(session_api.get_ticker(category="linear", symbol=symbol)["result"]["list"][0]["lastPrice"])
+
+    try:
+        tickers = session_api.get_tickers(category="linear")["result"]["list"]
+        price_data = next((item for item in tickers if item["symbol"] == symbol), None)
+        if price_data is None:
+            raise Exception(f"Kaina nerasta simboliui {symbol}")
+        price = float(price_data["lastPrice"])
+    except Exception as e:
+        print(f"❌ Klaida gaunant kainą {symbol}: {e}")
+        return 0
+
     position_value = balance * (settings["position_size_pct"] / 100)
     return round((position_value * settings["leverage"]) / price, 3)
-
 def place_order(symbol, side):
     try:
         qty = calculate_qty(symbol)
