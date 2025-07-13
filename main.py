@@ -49,8 +49,8 @@ def get_klines(symbol):
         )
         data = klines["result"]["list"]
         df = pd.DataFrame(data, columns=[
-            "timestamp", "open", "high", "low", "close", "volume",
-            "_", "_", "_", "_", "_"
+    "timestamp", "open", "high", "low", "close", "volume", "turnover"
+])
         ])
         df["close"] = df["close"].astype(float)
         df["volume"] = df["volume"].astype(float)
