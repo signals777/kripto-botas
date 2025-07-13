@@ -3,7 +3,7 @@ from datetime import timedelta, datetime
 import threading
 import time
 import pandas as pd
-import os  # ← ŠITA EILUTĖ YRA BŪTINA
+import os
 from pybit.unified_trading import HTTP
 from ta.momentum import RSIIndicator, StochasticOscillator
 from ta.trend import EMAIndicator, SMAIndicator, CCIIndicator
@@ -14,17 +14,14 @@ app = Flask(__name__)
 app.secret_key = 'QwertghjkL123***'
 app.permanent_session_lifetime = timedelta(minutes=60)
 
-# Vartotojai
 USERS = {"virglel@gmail.com": "QwertghjkL123***"}
 
-# Bybit API
 session_api = HTTP(
     api_key="b2tL6abuyH7gEQjIC1",
     api_secret="azEVdZmiRBlHID75zQehXHYYYKw0jB8DDFPJ",
     testnet=False,
 )
 
-# Nustatymai
 settings = {
     "leverage": 5,
     "position_size_pct": 10,
@@ -42,7 +39,88 @@ balance_graph = []
 balance_times = []
 bot_status = "Sustabdyta"
 
-# Pagalbinės funkcijos
+def get_klines(symbol):
+    try:
+        klines = session_api.get_kline(
+            category="linear",
+            symbol=symbol,
+            interval="15",
+            limit=100
+        )
+        data = klines["result"]["list"]
+        df = pd.DataFrame(data, columns=[
+            "timestamp", "open", "high", "low", "close", "volume",
+            "_", "_", "_", "_", "_"
+        ])
+        df["close"] = df["close"].astype(float)
+        df["volume"] = df["volume"].astype(float)
+        return df
+    except Exception as e:
+        print(f"Klaida gaunant klines {symbol}: {e}")
+        return None
+
+def apply_ta_filters(df):
+    score = 0
+    close = df["close"]
+    volume = df["volume"]
+
+    if "EMA" in settings["ta_filters"]:
+        ema = EMAIndicator(close, window=20).ema_indicator()
+        if close.iloc[-1] > ema.iloc[-1]:
+            score += 1
+
+    if "RSI" in settings["ta_filters"]:
+        rsi = RSIIndicator(close, window=14).rsi()
+        if rsi.iloc[-1] < 30:
+            score += 1
+
+    if "BB" in settings["ta_filters"]:
+        bb = BollingerBands(close, window=20)
+        if close.iloc[-1] < bb.bollinger_lband().iloc[-1]:
+            score += 1
+
+    if "StochRSI" in settings["ta_filters"]:
+        stoch = StochasticOscillator(close, close, close)
+        if stoch.stoch().iloc[-1] < 20:
+            score += 1
+
+    if "CCI" in settings["ta_filters"]:
+        cci = CCIIndicator(close, close, close, window=20)
+        if cci.cci().iloc[-1] < -100:
+            score += 1
+
+    if "SMA" in settings["ta_filters"]:
+        sma = SMAIndicator(close, window=50).sma_indicator()
+        if close.iloc[-1] > sma.iloc[-1]:
+            score += 1
+
+    if "Volume" in settings["ta_filters"]:
+        vol_avg = volume.rolling(20).mean()
+        if volume.iloc[-1] > vol_avg.iloc[-1]:
+            score += 1
+
+    if "ATR" in settings["ta_filters"]:
+        atr = AverageTrueRange(high=close, low=close, close=close).average_true_range()
+        if atr.iloc[-1] > atr.mean():
+            score += 1
+
+    # AI / LSTM galima pridėti vėliau – čia kol kas palikta vieta
+    if "AI" in settings["ta_filters"]:
+        score += 0  # būsimas AI modelis
+
+    return score
+
+def fetch_top_symbols():
+    global symbols
+    try:
+        data = session_api.get_tickers(category="linear")
+        tickers = data["result"]["list"]
+        sorted_tickers = sorted(tickers, key=lambda x: float(x["volume24h"]), reverse=True)
+        symbols = [t["symbol"] for t in sorted_tickers[:settings["n_pairs"]]]
+    except Exception as e:
+        print(f"Klaida fetch_top_symbols: {e}")
+        symbols = []
+
 def calculate_qty(symbol):
     balance = balance_info()["balansas"]
     price = float(session_api.get_ticker(category="linear", symbol=symbol)["result"]["list"][0]["lastPrice"])
@@ -68,7 +146,6 @@ def place_order(symbol, side):
             reduce_only=False
         )
 
-        # Take Profit
         session_api.place_order(
             category="linear",
             symbol=symbol,
@@ -80,7 +157,6 @@ def place_order(symbol, side):
             reduce_only=True
         )
 
-        # Stop Loss
         session_api.place_order(
             category="linear",
             symbol=symbol,
@@ -114,7 +190,6 @@ def balance_info():
     except:
         return {"balansas": 0}
 
-# Web panelė
 @app.route("/", methods=["GET", "POST"])
 def index():
     if "user" not in session:
@@ -170,7 +245,6 @@ def change_password():
         return redirect(url_for("index"))
     return "<h3>Neteisingas senas slaptažodis.</h3>"
 
-# Boto ciklas
 def trading_loop():
     global bot_status
     while True:
@@ -187,11 +261,10 @@ def trading_loop():
                     last_trade_time[symbol] = now
         time.sleep(60)
 
-# Automatinis paleidimas be Gunicorn
 if __name__ == "__main__":
     print("🔁 Boto ciklas paleistas")
     t = threading.Thread(target=trading_loop)
     t.daemon = True
     t.start()
-    port = int(os.environ.get("PORT", 8000))  # Railway suteikia dinaminį PORT
+    port = int(os.environ.get("PORT", 8000))
     app.run(host="0.0.0.0", port=port)
