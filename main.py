@@ -51,7 +51,6 @@ def get_klines(symbol):
         df = pd.DataFrame(data, columns=[
     "timestamp", "open", "high", "low", "close", "volume", "turnover"
 ])
-        ])
         df["close"] = df["close"].astype(float)
         df["volume"] = df["volume"].astype(float)
         return df
