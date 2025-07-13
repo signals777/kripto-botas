@@ -3,6 +3,7 @@ from datetime import timedelta, datetime
 import threading
 import time
 import pandas as pd
+import os  # ← ŠITA EILUTĖ YRA BŪTINA
 from pybit.unified_trading import HTTP
 from ta.momentum import RSIIndicator, StochasticOscillator
 from ta.trend import EMAIndicator, SMAIndicator, CCIIndicator
