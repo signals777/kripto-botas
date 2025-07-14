@@ -67,109 +67,87 @@ def apply_ta_filters(df):
         ema = EMAIndicator(close, window=20).ema_indicator()
         if close.iloc[-1] > ema.iloc[-1]:
             score += 1
-
     if "RSI" in settings["ta_filters"]:
         rsi = RSIIndicator(close, window=14).rsi()
         if rsi.iloc[-1] < 30:
             score += 1
-
     if "BB" in settings["ta_filters"]:
         bb = BollingerBands(close, window=20)
         if close.iloc[-1] < bb.bollinger_lband().iloc[-1]:
             score += 1
-
     if "StochRSI" in settings["ta_filters"]:
         stoch = StochasticOscillator(close, close, close)
         if stoch.stoch().iloc[-1] < 20:
             score += 1
-
     if "CCI" in settings["ta_filters"]:
         cci = CCIIndicator(close, close, close, window=20)
         if cci.cci().iloc[-1] < -100:
             score += 1
-
     if "SMA" in settings["ta_filters"]:
         sma = SMAIndicator(close, window=50).sma_indicator()
         if close.iloc[-1] > sma.iloc[-1]:
             score += 1
-
     if "Volume" in settings["ta_filters"]:
         vol_avg = volume.rolling(20).mean()
         if volume.iloc[-1] > vol_avg.iloc[-1]:
             score += 1
-
     if "ATR" in settings["ta_filters"]:
         atr = AverageTrueRange(high=close, low=close, close=close).average_true_range()
         if atr.iloc[-1] > atr.mean():
             score += 1
-
     if "AI" in settings["ta_filters"]:
         score += 0
-
     return score
 
 def fetch_top_symbols():
     global symbols
     try:
+        data = session_api.get_instruments(category="linear")["result"]["list"]
+        valid = []
+        for item in data:
+            if not all(k in item for k in ["symbol", "lotSizeFilter", "priceFilter"]):
+                continue
+            if "minOrderQty" in item["lotSizeFilter"] and "qtyStep" in item["lotSizeFilter"]:
+                min_qty = float(item["lotSizeFilter"]["minOrderQty"])
+                step = float(item["lotSizeFilter"]["qtyStep"])
+                if min_qty > 0 and step > 0:
+                    valid.append(item["symbol"])
         ticker_data = session_api.get_tickers(category="linear")["result"]["list"]
-        filtered = []
-        for item in ticker_data:
-            if "symbol" in item and "lastPrice" in item:
-                filtered.append(item)
+        filtered = [t for t in ticker_data if t["symbol"] in valid]
         sorted_tickers = sorted(filtered, key=lambda x: float(x["volume24h"]), reverse=True)
-        symbols[:] = [t["symbol"] for t in sorted_tickers[:settings["n_pairs"]]]
+        symbols = [t["symbol"] for t in sorted_tickers[:settings["n_pairs"]]]
     except Exception as e:
         print(f"Klaida fetch_top_symbols: {e}")
         symbols = []
 
-def balance_info():
-    try:
-        bal = float(session_api.get_wallet_balance(accountType="UNIFIED")["result"]["list"][0]["totalEquity"])
-        return {"balansas": round(bal, 2)}
-    except:
-        return {"balansas": 0}
-
 def calculate_qty(symbol):
+    balance = balance_info()["balansas"]
     try:
-        import math
-        session_api = get_session_api()
-        
-        tickers = session_api.get_tickers(category="linear", symbol=symbol)
-        if 'result' not in tickers or not tickers['result']['list']:
-            print(f"❌ Nepavyko gauti kainos: {symbol}")
-            return 0
-        
-        price = float(tickers['result']['list'][0]['lastPrice'])
-        if price == 0:
-            print(f"❌ Kaina lygi 0: {symbol}")
-            return 0
+        instruments = session_api.get_instruments(category="linear")["result"]["list"]
+        instr = next((x for x in instruments if x["symbol"] == symbol), None)
+        if not instr:
+            raise Exception(f"Nerasta instrumentų info {symbol}")
+        min_qty = float(instr["lotSizeFilter"]["minOrderQty"])
+        qty_step = float(instr["lotSizeFilter"]["qtyStep"])
 
-        instruments = session_api.get_instruments(category="linear")['result']['list']
-        info = next((s for s in instruments if s['symbol'] == symbol), None)
-        if not info:
-            print(f"❌ Nepavyko rasti simbolio informacijos: {symbol}")
-            return 0
-
-        min_qty = float(info['lotSizeFilter']['minOrderQty'])
-        qty_step = float(info['lotSizeFilter']['qtyStep'])
-        if qty_step <= 0:
-            print(f"❌ Neteisingas qtyStep: {symbol}")
-            return 0
-
-        usdt_balance = get_wallet_balance()
-        position_size = usdt_balance * 0.10  # 10% kapitalo
-        raw_qty = position_size * 5 / price  # x5 svertas
-
-        qty = raw_qty - (raw_qty % qty_step)
-
-        if qty < min_qty:
-            print(f"❌ Apskaičiuotas kiekis per mažas: {symbol}")
-            return 0
-
-        return round(qty, 8)
+        tickers = session_api.get_tickers(category="linear")["result"]["list"]
+        price_data = next((item for item in tickers if item["symbol"] == symbol), None)
+        if price_data is None or "lastPrice" not in price_data:
+            raise Exception(f"Nerasta kaina {symbol}")
+        price = float(price_data["lastPrice"])
     except Exception as e:
         print(f"❌ Klaida skaičiuojant kiekį {symbol}: {e}")
         return 0
+
+    position_value = balance * (settings["position_size_pct"] / 100)
+    qty = (position_value * settings["leverage"]) / price
+
+    if qty < min_qty:
+        return 0
+
+    steps = round(qty / qty_step)
+    final_qty = steps * qty_step
+    return round(final_qty, 6)
 
 def place_order(symbol, side):
     try:
@@ -231,6 +209,13 @@ def place_order(symbol, side):
         print(f"✅ Užsakymas: {symbol} - {side}")
     except Exception as e:
         print(f"❌ Užsakymo klaida {symbol}: {e}")
+
+def balance_info():
+    try:
+        bal = float(session_api.get_wallet_balance(accountType="UNIFIED")["result"]["list"][0]["totalEquity"])
+        return {"balansas": round(bal, 2)}
+    except:
+        return {"balansas": 0}
 
 @app.route("/", methods=["GET", "POST"])
 def index():
