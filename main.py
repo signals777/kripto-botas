@@ -130,28 +130,43 @@ def balance_info():
         return {"balansas": 0}
 
 def calculate_qty(symbol):
-    balance = balance_info()["balansas"]
     try:
-        tickers = session_api.get_tickers(category="linear")["result"]["list"]
-        price_data = next((item for item in tickers if item["symbol"] == symbol), None)
-        instruments = session_api.get_symbols(category="linear")["result"]["list"]
-        instrument = next((item for item in instruments if item["symbol"] == symbol), None)
+        import math
+        session_api = get_session_api()
+        
+        tickers = session_api.get_tickers(category="linear", symbol=symbol)
+        if 'result' not in tickers or not tickers['result']['list']:
+            print(f"❌ Nepavyko gauti kainos: {symbol}")
+            return 0
+        
+        price = float(tickers['result']['list'][0]['lastPrice'])
+        if price == 0:
+            print(f"❌ Kaina lygi 0: {symbol}")
+            return 0
 
-        if price_data is None or "lastPrice" not in price_data:
-            raise Exception(f"Nerasta kaina instrumentui {symbol}")
-        if instrument is None or "lotSizeFilter" not in instrument:
-            raise Exception(f"Nerasta lotSizeFilter instrumentui {symbol}")
+        instruments = session_api.get_instruments(category="linear")['result']['list']
+        info = next((s for s in instruments if s['symbol'] == symbol), None)
+        if not info:
+            print(f"❌ Nepavyko rasti simbolio informacijos: {symbol}")
+            return 0
 
-        price = float(price_data["lastPrice"])
-        min_qty = float(instrument["lotSizeFilter"]["minOrderQty"])
-        step = float(instrument["lotSizeFilter"]["qtyStep"])
+        min_qty = float(info['lotSizeFilter']['minOrderQty'])
+        qty_step = float(info['lotSizeFilter']['qtyStep'])
+        if qty_step <= 0:
+            print(f"❌ Neteisingas qtyStep: {symbol}")
+            return 0
 
-        position_value = balance * (settings["position_size_pct"] / 100)
-        qty = (position_value * settings["leverage"]) / price
+        usdt_balance = get_wallet_balance()
+        position_size = usdt_balance * 0.10  # 10% kapitalo
+        raw_qty = position_size * 5 / price  # x5 svertas
 
-        qty = max(min_qty, round(qty / step) * step)
+        qty = raw_qty - (raw_qty % qty_step)
+
+        if qty < min_qty:
+            print(f"❌ Apskaičiuotas kiekis per mažas: {symbol}")
+            return 0
+
         return round(qty, 8)
-
     except Exception as e:
         print(f"❌ Klaida skaičiuojant kiekį {symbol}: {e}")
         return 0
