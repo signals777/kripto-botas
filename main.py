@@ -21,7 +21,7 @@ def get_session_api():
     return HTTP(
         api_key="b2tL6abuyH7gEQjIC1",
         api_secret="azEVdZmiRBlHID75zQehXHYYYKw0jB8DDFPJ",
-        testnet=False
+        testnet=False,
     )
 
 settings = {
@@ -39,13 +39,14 @@ symbols = []
 trade_history = []
 balance_graph = []
 balance_times = []
-is_bot_running = False
 bot_status = "Sustabdyta"
 max_balance = 0
+risk_mode = False
+
 def get_klines(symbol):
     try:
-        session_api = get_session_api()
-        klines = session_api.get_kline(
+        api = get_session_api()
+        klines = api.get_kline(
             category="linear",
             symbol=symbol,
             interval=15,
@@ -71,8 +72,7 @@ def apply_ta_filters(df):
         ema = EMAIndicator(close, window=20).ema_indicator()
         if close.iloc[-1] > ema.iloc[-1]:
             score += 1
-
-    if "RSI" in settings["ta_filters"]:
+                if "RSI" in settings["ta_filters"]:
         rsi = RSIIndicator(close, window=14).rsi()
         if rsi.iloc[-1] < 30:
             score += 1
@@ -108,21 +108,39 @@ def apply_ta_filters(df):
             score += 1
 
     if "AI" in settings["ta_filters"]:
-        score += 0  # AI modelis nepritaikytas
+        score += 0  # ateityje galima prijungti AI modelį
 
     return score
 
-def fetch_top_symbols():
+def balance_info():
+    global max_balance, risk_mode
+    try:
+        api = get_session_api()
+        bal = float(api.get_wallet_balance(accountType="UNIFIED")["result"]["list"][0]["totalEquity"])
+        bal = round(bal, 2)
+
+        if max_balance == 0:
+            max_balance = bal
+
+        if bal > max_balance:
+            max_balance = bal
+            risk_mode = False  # išeinam iš rizikos režimo
+
+        elif bal < max_balance * 0.99:
+            if not risk_mode:
+                print("⚠️ Įjungtas rizikos režimas (balansas nukrito >1%)")
+                risk_mode = True
+
+        return {"balansas": bal}
+    except:
+        return {"balansas": 0}
+        def fetch_top_symbols():
     global symbols
     try:
-        session_api = get_session_api()
-        data = session_api.get_tickers(category="linear")
+        api = get_session_api()
+        data = api.get_tickers(category="linear")
         tickers = data["result"]["list"]
-        sorted_tickers = sorted(
-            [t for t in tickers if "USDT" in t["symbol"]],
-            key=lambda x: float(x.get("volume24h", 0)),
-            reverse=True
-        )
+        sorted_tickers = sorted(tickers, key=lambda x: float(x["volume24h"]), reverse=True)
         symbols = [t["symbol"] for t in sorted_tickers[:settings["n_pairs"]]]
     except Exception as e:
         print(f"Klaida fetch_top_symbols: {e}")
@@ -130,23 +148,25 @@ def fetch_top_symbols():
 
 def calculate_qty(symbol):
     try:
-        session_api = get_session_api()
-        tickers = session_api.get_tickers(category="linear", symbol=symbol)
-        price = float(tickers['result']['list'][0]['lastPrice'])
+        api = get_session_api()
+        balance = balance_info()["balansas"]
+        tickers = api.get_tickers(category="linear")["result"]["list"]
+        price_data = next((item for item in tickers if item["symbol"] == symbol), None)
+        if price_data is None:
+            raise Exception(f"Kaina nerasta simboliui {symbol}")
+        price = float(price_data["lastPrice"])
 
-        instruments = session_api.get_instruments(category="linear")['result']['list']
-        info = next((s for s in instruments if s['symbol'] == symbol), None)
-
+        instruments = api.get_instruments(category="linear")["result"]["list"]
+        info = next((item for item in instruments if item["symbol"] == symbol), None)
         if not info:
             print(f"❌ Nepavyko rasti simbolio informacijos: {symbol}")
             return 0
 
         min_qty = float(info['lotSizeFilter']['minOrderQty'])
         qty_step = float(info['lotSizeFilter']['qtyStep'])
-        usdt_balance = balance_info()["balansas"]
 
-        position_size = usdt_balance * (settings["position_size_pct"] / 100)
-        raw_qty = position_size * settings["leverage"] / price
+        position_value = balance * (settings["position_size_pct"] / 100)
+        raw_qty = (position_value * settings["leverage"]) / price
 
         precision = round(-math.log10(qty_step))
         qty = round(raw_qty, precision)
@@ -159,14 +179,15 @@ def calculate_qty(symbol):
     except Exception as e:
         print(f"❌ Klaida skaičiuojant kiekį {symbol}: {e}")
         return 0
-        def place_order(symbol, side):
+
+def place_order(symbol, side):
     try:
-        session_api = get_session_api()
+        api = get_session_api()
         qty = calculate_qty(symbol)
         if qty == 0:
-            raise Exception("Kiekis yra 0")
+            return
 
-        price_data = session_api.get_tickers(category="linear")["result"]["list"]
+        price_data = api.get_tickers(category="linear")["result"]["list"]
         entry_data = next((item for item in price_data if item["symbol"] == symbol), None)
         if entry_data is None:
             raise Exception("Nepavyko gauti kainos")
@@ -175,7 +196,7 @@ def calculate_qty(symbol):
         tp_price = round(entry_price * (1 + settings["take_profit"]), 2)
         sl_price = round(entry_price * (1 - settings["stop_loss"]), 2)
 
-        session_api.place_order(
+        api.place_order(
             category="linear",
             symbol=symbol,
             side=side,
@@ -185,7 +206,7 @@ def calculate_qty(symbol):
             reduce_only=False
         )
 
-        session_api.place_order(
+        api.place_order(
             category="linear",
             symbol=symbol,
             side="Sell" if side == "Buy" else "Buy",
@@ -196,12 +217,13 @@ def calculate_qty(symbol):
             reduce_only=True
         )
 
-        session_api.place_order(
+        api.place_order(
             category="linear",
             symbol=symbol,
             side="Sell" if side == "Buy" else "Buy",
             order_type="StopMarket",
             qty=qty,
+            stop_loss=str(sl_price),
             trigger_price=str(sl_price),
             trigger_by="LastPrice",
             time_in_force="GoodTillCancel",
@@ -220,23 +242,7 @@ def calculate_qty(symbol):
         print(f"✅ Užsakymas: {symbol} - {side}")
     except Exception as e:
         print(f"❌ Užsakymo klaida {symbol}: {e}")
-
-def balance_info():
-    global max_balance, is_bot_running, bot_status
-    try:
-        session_api = get_session_api()
-        bal = float(session_api.get_wallet_balance(accountType="UNIFIED")["result"]["list"][0]["totalEquity"])
-        if bal > max_balance:
-            max_balance = bal
-        if bal < max_balance * 0.99:
-            print("🛑 Apsauga: balansas nukrito >1% nuo aukščiausio — stabdom botas")
-            is_bot_running = False
-            bot_status = "Sustabdyta"
-        return {"balansas": round(bal, 2)}
-    except:
-        return {"balansas": 0}
-
-@app.route("/", methods=["GET", "POST"])
+        @app.route("/", methods=["GET", "POST"])
 def index():
     if "user" not in session:
         return redirect(url_for("login"))
@@ -271,15 +277,13 @@ def logout():
 
 @app.route("/start")
 def start_bot():
-    global is_bot_running, bot_status
-    is_bot_running = True
+    global bot_status
     bot_status = "Veikia"
     return redirect(url_for("index"))
 
 @app.route("/stop")
 def stop_bot():
-    global is_bot_running, bot_status
-    is_bot_running = False
+    global bot_status
     bot_status = "Sustabdyta"
     return redirect(url_for("index"))
 
@@ -292,10 +296,11 @@ def change_password():
         USERS[user] = new
         return redirect(url_for("index"))
     return "<h3>Neteisingas senas slaptažodis.</h3>"
-    def trading_loop():
-    global is_bot_running
+
+def trading_loop():
+    global bot_status
     while True:
-        if is_bot_running:
+        if bot_status == "Veikia":
             fetch_top_symbols()
             for symbol in symbols:
                 df = get_klines(symbol)
@@ -303,15 +308,23 @@ def change_password():
                     continue
                 score = apply_ta_filters(df)
                 now = time.time()
-                if score >= 3 and now - last_trade_time.get(symbol, 0) > settings["cooldown"] * 60:
+
+                # Dinaminė prekybos logika pagal rizikos režimą
+                if not risk_mode and score >= 3 and now - last_trade_time.get(symbol, 0) > settings["cooldown"] * 60:
                     place_order(symbol, side="Buy")
                     last_trade_time[symbol] = now
-        time.sleep(60)
 
-if __name__ == "__main__":
+                elif risk_mode and score >= 5 and now - last_trade_time.get(symbol, 0) > settings["cooldown"] * 60:
+                    place_order(symbol, side="Buy")
+                    last_trade_time[symbol] = now
+
+        time.sleep(60)
+        if __name__ == "__main__":
     print("🔁 Boto ciklas paleistas")
+
     t = threading.Thread(target=trading_loop)
     t.daemon = True
     t.start()
+
     port = int(os.environ.get("PORT", 8000))
     app.run(host="0.0.0.0", port=port)
