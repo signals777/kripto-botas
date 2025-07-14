@@ -42,7 +42,6 @@ balance_times = []
 bot_status = "Sustabdyta"
 max_balance = 0
 risk_mode = False
-
 def get_klines(symbol):
     try:
         api = get_session_api()
@@ -72,7 +71,8 @@ def apply_ta_filters(df):
         ema = EMAIndicator(close, window=20).ema_indicator()
         if close.iloc[-1] > ema.iloc[-1]:
             score += 1
-                if "RSI" in settings["ta_filters"]:
+
+    if "RSI" in settings["ta_filters"]:
         rsi = RSIIndicator(close, window=14).rsi()
         if rsi.iloc[-1] < 30:
             score += 1
@@ -108,7 +108,7 @@ def apply_ta_filters(df):
             score += 1
 
     if "AI" in settings["ta_filters"]:
-        score += 0  # ateityje galima prijungti AI modelį
+        score += 0  # AI logika bus prijungta vėliau
 
     return score
 
@@ -124,7 +124,7 @@ def balance_info():
 
         if bal > max_balance:
             max_balance = bal
-            risk_mode = False  # išeinam iš rizikos režimo
+            risk_mode = False  # išjungiame rizikos režimą
 
         elif bal < max_balance * 0.99:
             if not risk_mode:
@@ -296,8 +296,7 @@ def change_password():
         USERS[user] = new
         return redirect(url_for("index"))
     return "<h3>Neteisingas senas slaptažodis.</h3>"
-
-def trading_loop():
+    def trading_loop():
     global bot_status
     while True:
         if bot_status == "Veikia":
@@ -319,7 +318,9 @@ def trading_loop():
                     last_trade_time[symbol] = now
 
         time.sleep(60)
-        if __name__ == "__main__":
+
+
+if __name__ == "__main__":
     print("🔁 Boto ciklas paleistas")
 
     t = threading.Thread(target=trading_loop)
