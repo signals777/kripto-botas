@@ -42,19 +42,13 @@ balance_times = []
 bot_status = "Sustabdyta"
 max_balance = 0
 risk_mode = False
+
 def get_klines(symbol):
     try:
         api = get_session_api()
-        klines = api.get_kline(
-            category="linear",
-            symbol=symbol,
-            interval=15,
-            limit=100
-        )
+        klines = api.get_kline(category="linear", symbol=symbol, interval=15, limit=100)
         data = klines["result"]["list"]
-        df = pd.DataFrame(data, columns=[
-            "timestamp", "open", "high", "low", "close", "volume", "turnover"
-        ])
+        df = pd.DataFrame(data, columns=["timestamp", "open", "high", "low", "close", "volume", "turnover"])
         df["close"] = df["close"].astype(float)
         df["volume"] = df["volume"].astype(float)
         return df
@@ -108,7 +102,7 @@ def apply_ta_filters(df):
             score += 1
 
     if "AI" in settings["ta_filters"]:
-        score += 0  # AI logika bus prijungta vėliau
+        score += 0
 
     return score
 
@@ -124,7 +118,7 @@ def balance_info():
 
         if bal > max_balance:
             max_balance = bal
-            risk_mode = False  # išjungiame rizikos režimą
+            risk_mode = False
 
         elif bal < max_balance * 0.99:
             if not risk_mode:
@@ -134,7 +128,8 @@ def balance_info():
         return {"balansas": bal}
     except:
         return {"balansas": 0}
-        def fetch_top_symbols():
+
+def fetch_top_symbols():
     global symbols
     try:
         api = get_session_api()
@@ -242,7 +237,8 @@ def place_order(symbol, side):
         print(f"✅ Užsakymas: {symbol} - {side}")
     except Exception as e:
         print(f"❌ Užsakymo klaida {symbol}: {e}")
-        @app.route("/", methods=["GET", "POST"])
+
+@app.route("/", methods=["GET", "POST"])
 def index():
     if "user" not in session:
         return redirect(url_for("login"))
@@ -296,7 +292,8 @@ def change_password():
         USERS[user] = new
         return redirect(url_for("index"))
     return "<h3>Neteisingas senas slaptažodis.</h3>"
-    def trading_loop():
+
+def trading_loop():
     global bot_status
     while True:
         if bot_status == "Veikia":
@@ -319,13 +316,10 @@ def change_password():
 
         time.sleep(60)
 
-
 if __name__ == "__main__":
     print("🔁 Boto ciklas paleistas")
-
     t = threading.Thread(target=trading_loop)
     t.daemon = True
     t.start()
-
     port = int(os.environ.get("PORT", 8000))
     app.run(host="0.0.0.0", port=port)
