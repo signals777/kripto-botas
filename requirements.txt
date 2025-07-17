@@ -4,3 +4,4 @@ numpy==1.24.4
 pandas==2.2.2
 pybit==5.11.0
 requests==2.31.0
+setuptools==65.5.0
