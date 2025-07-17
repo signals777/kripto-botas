@@ -29,7 +29,7 @@ settings = {
     "position_size_pct": 10,
     "take_profit": 0.03,
     "stop_loss": 0.015,
-    "n_pairs": 100,
+    "n_pairs": 75,
     "cooldown": 5,
     "ta_filters": ["EMA", "RSI", "BB", "StochRSI", "CCI", "SMA", "VWAP", "Volume", "ATR", "AI"]
 }
@@ -65,44 +65,36 @@ def apply_ta_filters(df):
         ema = EMAIndicator(close, window=20).ema_indicator()
         if close.iloc[-1] > ema.iloc[-1]:
             score += 1
-
     if "RSI" in settings["ta_filters"]:
         rsi = RSIIndicator(close, window=14).rsi()
         if rsi.iloc[-1] < 30:
             score += 1
-
     if "BB" in settings["ta_filters"]:
         bb = BollingerBands(close, window=20)
         if close.iloc[-1] < bb.bollinger_lband().iloc[-1]:
             score += 1
-
     if "StochRSI" in settings["ta_filters"]:
         stoch = StochasticOscillator(close, close, close)
         if stoch.stoch().iloc[-1] < 20:
             score += 1
-
     if "CCI" in settings["ta_filters"]:
         cci = CCIIndicator(close, close, close, window=20)
         if cci.cci().iloc[-1] < -100:
             score += 1
-
     if "SMA" in settings["ta_filters"]:
         sma = SMAIndicator(close, window=50).sma_indicator()
         if close.iloc[-1] > sma.iloc[-1]:
             score += 1
-
     if "Volume" in settings["ta_filters"]:
         vol_avg = volume.rolling(20).mean()
         if volume.iloc[-1] > vol_avg.iloc[-1]:
             score += 1
-
     if "ATR" in settings["ta_filters"]:
         atr = AverageTrueRange(high=close, low=close, close=close).average_true_range()
         if atr.iloc[-1] > atr.mean():
             score += 1
-
     if "AI" in settings["ta_filters"]:
-        score += 0
+        score += 0  # rezervuota AI
 
     return score
 
@@ -120,9 +112,9 @@ def balance_info():
             max_balance = bal
             risk_mode = False
 
-        elif bal < max_balance * 0.99:
+        elif bal < max_balance * 0.995:
             if not risk_mode:
-                print("⚠️ Įjungtas rizikos režimas (balansas nukrito >1%)")
+                print("⚠️ Įjungtas rizikos režimas (-0.5%)")
                 risk_mode = True
 
         return {"balansas": bal}
@@ -133,10 +125,25 @@ def fetch_top_symbols():
     global symbols
     try:
         api = get_session_api()
-        data = api.get_tickers(category="linear")
-        tickers = data["result"]["list"]
+        tickers = api.get_tickers(category="linear")["result"]["list"]
+        info = api.get_symbols(category="linear")["result"]["list"]
+
+        valid = {item["symbol"]: item for item in info if item.get("contractType") == "Linear"}
         sorted_tickers = sorted(tickers, key=lambda x: float(x["volume24h"]), reverse=True)
-        symbols = [t["symbol"] for t in sorted_tickers[:settings["n_pairs"]]]
+
+        filtered = []
+        for t in sorted_tickers:
+            symbol = t["symbol"]
+            if symbol in valid:
+                filt = valid[symbol]
+                if filt.get("lotSizeFilter"):
+                    min_qty = float(filt["lotSizeFilter"]["minOrderQty"])
+                    qty_step = float(filt["lotSizeFilter"]["qtyStep"])
+                    if min_qty > 0 and qty_step > 0:
+                        filtered.append(symbol)
+            if len(filtered) >= settings["n_pairs"]:
+                break
+        symbols = filtered
     except Exception as e:
         print(f"Klaida fetch_top_symbols: {e}")
         symbols = []
@@ -151,14 +158,14 @@ def calculate_qty(symbol):
             raise Exception(f"Kaina nerasta simboliui {symbol}")
         price = float(price_data["lastPrice"])
 
-        instruments = api.get_instruments(category="linear")["result"]["list"]
-        info = next((item for item in instruments if item["symbol"] == symbol), None)
-        if not info:
-            print(f"❌ Nepavyko rasti simbolio informacijos: {symbol}")
+        info = api.get_symbols(category="linear")["result"]["list"]
+        sym_info = next((i for i in info if i["symbol"] == symbol), None)
+        if not sym_info:
+            print(f"❌ Simbolio info nerasta: {symbol}")
             return 0
 
-        min_qty = float(info['lotSizeFilter']['minOrderQty'])
-        qty_step = float(info['lotSizeFilter']['qtyStep'])
+        min_qty = float(sym_info['lotSizeFilter']['minOrderQty'])
+        qty_step = float(sym_info['lotSizeFilter']['qtyStep'])
 
         position_value = balance * (settings["position_size_pct"] / 100)
         raw_qty = (position_value * settings["leverage"]) / price
@@ -167,7 +174,7 @@ def calculate_qty(symbol):
         qty = round(raw_qty, precision)
 
         if qty < min_qty:
-            print(f"❌ Apskaičiuotas kiekis per mažas: {symbol}")
+            print(f"❌ Kiekis per mažas: {symbol}")
             return 0
 
         return qty
@@ -182,56 +189,19 @@ def place_order(symbol, side):
         if qty == 0:
             return
 
-        price_data = api.get_tickers(category="linear")["result"]["list"]
-        entry_data = next((item for item in price_data if item["symbol"] == symbol), None)
-        if entry_data is None:
+        tickers = api.get_tickers(category="linear")["result"]["list"]
+        entry = next((item for item in tickers if item["symbol"] == symbol), None)
+        if entry is None:
             raise Exception("Nepavyko gauti kainos")
-        entry_price = float(entry_data["lastPrice"])
+        entry_price = float(entry["lastPrice"])
+        tp = round(entry_price * (1 + settings["take_profit"]), 2)
+        sl = round(entry_price * (1 - settings["stop_loss"]), 2)
 
-        tp_price = round(entry_price * (1 + settings["take_profit"]), 2)
-        sl_price = round(entry_price * (1 - settings["stop_loss"]), 2)
+        api.place_order(category="linear", symbol=symbol, side=side, order_type="Market", qty=qty, time_in_force="GoodTillCancel", reduce_only=False)
+        api.place_order(category="linear", symbol=symbol, side="Sell" if side == "Buy" else "Buy", order_type="Limit", qty=qty, price=str(tp), time_in_force="GoodTillCancel", reduce_only=True)
+        api.place_order(category="linear", symbol=symbol, side="Sell" if side == "Buy" else "Buy", order_type="StopMarket", qty=qty, stop_loss=str(sl), trigger_price=str(sl), trigger_by="LastPrice", time_in_force="GoodTillCancel", reduce_only=True)
 
-        api.place_order(
-            category="linear",
-            symbol=symbol,
-            side=side,
-            order_type="Market",
-            qty=qty,
-            time_in_force="GoodTillCancel",
-            reduce_only=False
-        )
-
-        api.place_order(
-            category="linear",
-            symbol=symbol,
-            side="Sell" if side == "Buy" else "Buy",
-            order_type="Limit",
-            qty=qty,
-            price=str(tp_price),
-            time_in_force="GoodTillCancel",
-            reduce_only=True
-        )
-
-        api.place_order(
-            category="linear",
-            symbol=symbol,
-            side="Sell" if side == "Buy" else "Buy",
-            order_type="StopMarket",
-            qty=qty,
-            stop_loss=str(sl_price),
-            trigger_price=str(sl_price),
-            trigger_by="LastPrice",
-            time_in_force="GoodTillCancel",
-            reduce_only=True
-        )
-
-        trade_history.append({
-            "laikas": time.strftime("%Y-%m-%d %H:%M:%S"),
-            "pora": symbol,
-            "kryptis": side,
-            "kaina": entry_price,
-            "pozicija": round(qty * entry_price, 2)
-        })
+        trade_history.append({"laikas": time.strftime("%Y-%m-%d %H:%M:%S"), "pora": symbol, "kryptis": side, "kaina": entry_price, "pozicija": round(qty * entry_price, 2)})
         balance_graph.append(balance_info()["balansas"])
         balance_times.append(datetime.now().strftime("%H:%M"))
         print(f"✅ Užsakymas: {symbol} - {side}")
@@ -245,15 +215,7 @@ def index():
     if request.method == "POST":
         settings["n_pairs"] = int(request.form.get("n_pairs"))
         settings["ta_filters"] = request.form.getlist("ta_filters")
-    return render_template("index.html",
-        settings=settings,
-        bot_status=bot_status,
-        trade_history=trade_history[::-1],
-        balance=balance_info()["balansas"],
-        all_filters=["EMA", "RSI", "BB", "StochRSI", "CCI", "SMA", "VWAP", "Volume", "ATR", "AI"],
-        graph=balance_graph,
-        times=balance_times
-    )
+    return render_template("index.html", settings=settings, bot_status=bot_status, trade_history=trade_history[::-1], balance=balance_info()["balansas"], all_filters=["EMA", "RSI", "BB", "StochRSI", "CCI", "SMA", "VWAP", "Volume", "ATR", "AI"], graph=balance_graph, times=balance_times)
 
 @app.route("/login", methods=["POST", "GET"])
 def login():
@@ -304,20 +266,17 @@ def trading_loop():
                     continue
                 score = apply_ta_filters(df)
                 now = time.time()
-
-                # Dinaminė prekybos logika pagal rizikos režimą
                 if not risk_mode and score >= 3 and now - last_trade_time.get(symbol, 0) > settings["cooldown"] * 60:
-                    place_order(symbol, side="Buy")
+                    place_order(symbol, "Buy")
                     last_trade_time[symbol] = now
-
                 elif risk_mode and score >= 5 and now - last_trade_time.get(symbol, 0) > settings["cooldown"] * 60:
-                    place_order(symbol, side="Buy")
+                    place_order(symbol, "Buy")
                     last_trade_time[symbol] = now
-
+                time.sleep(0.4)
         time.sleep(60)
 
 if __name__ == "__main__":
-    print("🔁 Boto ciklas paleistas")
+    print("🔁 Boto ciklas pasiruošęs (paleidimas tik per panelę)")
     t = threading.Thread(target=trading_loop)
     t.daemon = True
     t.start()
