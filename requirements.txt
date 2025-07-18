@@ -6,3 +6,4 @@ pybit==5.11.0
 requests==2.31.0
 setuptools==65.5.0
 wheel
+scikit-learn==1.3.0
