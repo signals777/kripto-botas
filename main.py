@@ -2,16 +2,20 @@ import os
 import time
 import math
 import threading
-from flask import Flask, render_template_string
+from flask import Flask, render_template, request, redirect, url_for, session
+from datetime import timedelta
 import pandas as pd
 import numpy as np
 from pybit.unified_trading import HTTP
-from ta.momentum import RSIIndicator
-from ta.trend import EMAIndicator
-from ta.volatility import BollingerBands
+from ta.momentum import RSIIndicator, StochasticOscillator
+from ta.trend import EMAIndicator, SMAIndicator, CCIIndicator
+from ta.volatility import BollingerBands, AverageTrueRange
+from ta.volume import OnBalanceVolumeIndicator
 from sklearn.linear_model import LinearRegression
 
 app = Flask(__name__)
+app.secret_key = "slaptas_raktas"
+app.permanent_session_lifetime = timedelta(minutes=60)
 
 api_key = "b2tL6abuyH7gEQjIC1"
 api_secret = "azEVdZmiRBlHID75zQehXHYYYKw0jB8DDFPJ"
@@ -35,15 +39,8 @@ bot_status = "running"
 def fetch_top_symbols():
     try:
         session = get_session_api()
-        response = session.get_symbols()
-        data = response["result"]
-        tradable = [
-            item["symbol"]
-            for item in data
-            if item["status"] == "Trading"
-            and item["contractType"] == "LinearPerpetual"
-            and float(item["lotSizeFilter"]["minOrderQty"]) > 0
-        ]
+        response = session.get_tickers(category="linear")["result"]["list"]
+        tradable = [item["symbol"] for item in response if item["lastPrice"] is not None]
         return tradable[:settings["n_pairs"]]
     except Exception as e:
         print(f"Klaida fetch_top_symbols: {e}")
@@ -66,17 +63,14 @@ def calculate_qty(symbol):
     try:
         session = get_session_api()
         tickers = session.get_tickers(category="linear")["result"]["list"]
-        last_price = float(next(t for t in tickers if t["symbol"] == symbol)["lastPrice"])
-        instruments = session.get_symbols()["result"]
-        inst = next(i for i in instruments if i["symbol"] == symbol)
-        min_qty = float(inst["lotSizeFilter"]["minOrderQty"])
-        step = float(inst["lotSizeFilter"]["qtyStep"])
+        ticker = next(t for t in tickers if t["symbol"] == symbol)
+        last_price = float(ticker["lastPrice"])
         wallet = session.get_wallet_balance(accountType="UNIFIED")["result"]["list"][0]
         balance = float(wallet["totalEquity"])
         usdt_amount = (balance * settings["position_size_pct"] / 100)
         leverage = determine_leverage(0)
-        qty = math.floor((usdt_amount * leverage) / last_price / step) * step
-        return round(max(qty, min_qty), 3)
+        qty = math.floor((usdt_amount * leverage) / last_price * 100) / 100
+        return max(qty, 1)
     except Exception as e:
         print(f"Klaida calculate_qty: {e}")
         return None
@@ -129,6 +123,7 @@ def ai_predict(df):
 
 def trading_loop():
     global highest_balance, risk_mode, bot_status
+    print("🔁 Paleistas BOTO ciklas")
     while True:
         if bot_status != "running":
             time.sleep(3)
@@ -164,9 +159,11 @@ def trading_loop():
                     score += 1
                 if EMAIndicator(close).ema_indicator().iloc[-1] < close.iloc[-1]:
                     score += 1
+                if SMAIndicator(close).sma_indicator().iloc[-1] < close.iloc[-1]:
+                    score += 1
                 if ai_predict(df):
                     score += 2
-
+                print(f"{symbol} balas: {score}")
                 if score >= 3:
                     qty = calculate_qty(symbol)
                     leverage = determine_leverage(score)
@@ -179,27 +176,7 @@ def trading_loop():
 
 @app.route("/")
 def index():
-    return render_template_string("""
-    <html>
-    <head><title>Boto Panelė</title></head>
-    <body style="font-family:sans-serif;background:#111;color:#0f0;">
-    <h2>Boto būklė: {{ status }}</h2>
-    <form action="/start"><button type="submit">Start</button></form>
-    <form action="/stop"><button type="submit">Stop</button></form>
-    </body></html>
-    """, status=bot_status)
-
-@app.route("/start")
-def start_bot():
-    global bot_status
-    bot_status = "running"
-    return redirect("/")
-
-@app.route("/stop")
-def stop_bot():
-    global bot_status
-    bot_status = "stopped"
-    return redirect("/")
+    return render_template("index.html")
 
 if __name__ == "__main__":
     print("🔁 Boto ciklas paleistas automatiškai (serverio starto metu)")
