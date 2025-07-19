@@ -215,7 +215,7 @@ def stop_bot():
     return redirect(url_for("index"))
 
 if __name__ == "__main__":
-    print("🔁 Boto ciklas pasiruošęs (paleidimas tik per panelę)")
+    print("🔁 Boto ciklas paleistas automatiškai (serverio starto metu)")
     t = threading.Thread(target=trading_loop)
     t.daemon = True
     t.start()
