@@ -2,20 +2,16 @@ import os
 import time
 import math
 import threading
-from flask import Flask, render_template, request, redirect, url_for, session
-from datetime import timedelta, datetime
+from flask import Flask, render_template
 import pandas as pd
 import numpy as np
 from pybit.unified_trading import HTTP
-from ta.momentum import RSIIndicator, StochasticOscillator
-from ta.trend import EMAIndicator, SMAIndicator, CCIIndicator
-from ta.volatility import BollingerBands, AverageTrueRange
-from ta.volume import OnBalanceVolumeIndicator
+from ta.momentum import RSIIndicator
+from ta.trend import EMAIndicator
+from ta.volatility import BollingerBands
 from sklearn.linear_model import LinearRegression
 
 app = Flask(__name__)
-app.secret_key = "slaptas_raktas"
-app.permanent_session_lifetime = timedelta(minutes=60)
 
 api_key = "b2tL6abuyH7gEQjIC1"
 api_secret = "azEVdZmiRBlHID75zQehXHYYYKw0jB8DDFPJ"
@@ -34,7 +30,7 @@ settings = {
 symbol_cooldowns = {}
 highest_balance = None
 risk_mode = False
-bot_status = "stopped"
+bot_status = "running"
 
 def fetch_top_symbols():
     try:
@@ -60,7 +56,14 @@ def get_klines(symbol, interval="15", limit=100):
         print(f"Klaida get_klines: {e}")
         return None
 
-def calculate_qty(symbol):
+def determine_leverage(score):
+    if score >= 7:
+        return 10
+    elif score >= 3:
+        return 5
+    return 0
+
+def calculate_qty(symbol, leverage):
     try:
         session = get_session_api()
         tickers = session.get_tickers(category="linear")["result"]["list"]
@@ -72,19 +75,11 @@ def calculate_qty(symbol):
         wallet = session.get_wallet_balance(accountType="UNIFIED")["result"]["list"][0]
         balance = float(wallet["totalEquity"])
         usdt_amount = (balance * settings["position_size_pct"] / 100)
-        leverage = determine_leverage(0)
         qty = math.floor((usdt_amount * leverage) / last_price / step) * step
         return round(max(qty, min_qty), 3)
     except Exception as e:
         print(f"Klaida calculate_qty: {e}")
         return None
-
-def determine_leverage(score):
-    if score >= 7:
-        return 10
-    elif score >= 3:
-        return 5
-    return 1
 
 def place_order(symbol, side, qty, tp_pct, sl_pct):
     try:
@@ -103,7 +98,7 @@ def place_order(symbol, side, qty, tp_pct, sl_pct):
             stopLoss=sl_price,
             reduceOnly=False
         )
-        print(f"✅ Užsakymas: {symbol} {side} {qty}")
+        print(f"✅ Užsakymas: {symbol} {side} {qty} SL: {sl_price} TP: {tp_price}")
     except Exception as e:
         print(f"❌ Klaida place_order: {e}")
 
@@ -126,11 +121,8 @@ def ai_predict(df):
         return False
 
 def trading_loop():
-    global highest_balance, risk_mode, bot_status
+    global highest_balance, risk_mode
     while True:
-        if bot_status != "running":
-            time.sleep(3)
-            continue
         try:
             session = get_session_api()
             wallet = session.get_wallet_balance(accountType="UNIFIED")["result"]["list"][0]
@@ -162,22 +154,12 @@ def trading_loop():
                     score += 1
                 if EMAIndicator(close).ema_indicator().iloc[-1] < close.iloc[-1]:
                     score += 1
-                if SMAIndicator(close).sma_indicator().iloc[-1] < close.iloc[-1]:
-                    score += 1
-                if CCIIndicator(close=close, high=df["high"], low=df["low"]).cci().iloc[-1] < -100:
-                    score += 1
-                if AverageTrueRange(high=df["high"], low=df["low"], close=close).average_true_range().iloc[-1] > 0.5:
-                    score += 1
-                if StochasticOscillator(high=df["high"], low=df["low"], close=close).stoch().iloc[-1] < 20:
-                    score += 1
-                if OnBalanceVolumeIndicator(close, df["volume"]).on_balance_volume().iloc[-1] > 0:
-                    score += 1
                 if ai_predict(df):
                     score += 2
 
-                if score >= 3:
-                    qty = calculate_qty(symbol)
-                    leverage = determine_leverage(score)
+                leverage = determine_leverage(score)
+                if leverage > 0:
+                    qty = calculate_qty(symbol, leverage)
                     session.set_leverage(category="linear", symbol=symbol, buyLeverage=leverage, sellLeverage=leverage)
                     place_order(symbol, "Buy", qty, settings["take_profit"], settings["stop_loss"])
                     symbol_cooldowns[symbol] = time.time()
@@ -185,34 +167,9 @@ def trading_loop():
             print(f"Klaida trading_loop: {e}")
         time.sleep(5)
 
-@app.route("/", methods=["GET", "POST"])
+@app.route("/")
 def index():
-    if "logged_in" not in session:
-        return redirect(url_for("login"))
     return render_template("index.html")
-
-@app.route("/login", methods=["GET", "POST"])
-def login():
-    if request.method == "POST":
-        password = request.form.get("password")
-        if password == "QwertghjkL123***":
-            session["logged_in"] = True
-            return redirect(url_for("index"))
-    return render_template("login.html")
-
-@app.route("/start")
-def start_bot():
-    global bot_status
-    if "logged_in" in session:
-        bot_status = "running"
-    return redirect(url_for("index"))
-
-@app.route("/stop")
-def stop_bot():
-    global bot_status
-    if "logged_in" in session:
-        bot_status = "stopped"
-    return redirect(url_for("index"))
 
 if __name__ == "__main__":
     print("🔁 Boto ciklas paleistas automatiškai (serverio starto metu)")
