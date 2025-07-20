@@ -157,13 +157,13 @@ def trading_loop():
                     score += 1
                 if close.iloc[-1] < BollingerBands(close).bollinger_lband().iloc[-1]:
                     score += 1
-                if EMAIndicator(close).ema_indicator().iloc[-1] < close.iloc[-1]:
+                if EMAIndicator(close=close, window=14).ema_indicator().iloc[-1] < close.iloc[-1]:
                     score += 1
-                if SMAIndicator(close).sma_indicator().iloc[-1] < close.iloc[-1]:
+                if SMAIndicator(close=close, window=14).sma_indicator().iloc[-1] < close.iloc[-1]:
                     score += 1
                 if ai_predict(df):
                     score += 2
-                print(f"{symbol} balas: {score}")
+                    print(f"{symbol} balas: {score}")
                 if score >= 3:
                     qty = calculate_qty(symbol)
                     leverage = determine_leverage(score)
