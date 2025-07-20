@@ -44,7 +44,7 @@ def fetch_top_symbols():
         print(f"Klaida fetch_top_symbols: {e}")
         return []
 
-def get_klines(symbol, interval="15", limit=100):
+def get_klines(symbol, interval="5", limit=100):
     try:
         session = get_session_api()
         response = session.get_kline(category="linear", symbol=symbol, interval=interval, limit=limit)
