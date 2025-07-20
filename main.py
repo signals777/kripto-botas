@@ -163,7 +163,7 @@ def trading_loop():
                     score += 1
                 if ai_predict(df):
                     score += 2
-                    print(f"{symbol} balas: {score}")
+                print(f"{symbol} balas: {score}")
                 if score >= 3:
                     qty = calculate_qty(symbol)
                     leverage = determine_leverage(score)
