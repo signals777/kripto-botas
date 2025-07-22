@@ -2,7 +2,7 @@ import os
 import time
 import math
 import threading
-from flask import Flask, render_template, request, redirect, url_for, session
+from flask import Flask, render_template
 from datetime import timedelta
 import pandas as pd
 import numpy as np
@@ -31,9 +31,9 @@ settings = {
 }
 
 symbol_cooldowns = {}
-highest_balance = None
-risk_mode = False
 bot_status = "running"
+market_blocked_until = 0
+balance_history = []
 
 def fetch_top_symbols():
     try:
@@ -44,7 +44,7 @@ def fetch_top_symbols():
         print(f"Klaida fetch_top_symbols: {e}")
         return []
 
-def get_klines(symbol, interval="5", limit=100):
+def get_klines(symbol, interval="15", limit=100):
     try:
         session = get_session_api()
         response = session.get_kline(category="linear", symbol=symbol, interval=interval, limit=limit)
@@ -75,7 +75,7 @@ def calculate_qty(symbol):
 def determine_leverage(score):
     if score >= 7:
         return 10
-    elif score >= 3:
+    elif score >= 4:
         return 5
     return 1
 
@@ -118,35 +118,73 @@ def ai_predict(df):
         print(f"Klaida AI modelyje: {e}")
         return False
 
+def check_market_sentiment():
+    try:
+        session = get_session_api()
+        symbols = fetch_top_symbols()
+        up_count = 0
+        for symbol in symbols:
+            df = get_klines(symbol)
+            if df is None or len(df) < 20:
+                continue
+            rsi = RSIIndicator(df["close"]).rsi().iloc[-1]
+            ema = EMAIndicator(df["close"], window=14).ema_indicator().iloc[-1]
+            candle_up = df["close"].iloc[-1] > df["open"].iloc[-1]
+            if rsi > 50 and df["close"].iloc[-1] > ema and candle_up:
+                up_count += 1
+        print(f"📊 Rinkos analizė: {up_count} porų rodo kilimą")
+        return up_count >= 25
+    except Exception as e:
+        print(f"Klaida rinkos analizėje: {e}")
+        return False
+
 def trading_loop():
-    global highest_balance, risk_mode, bot_status
+    global bot_status, symbol_cooldowns, market_blocked_until, balance_history
+    drop_count = 0
     while True:
         if bot_status != "running":
             time.sleep(3)
             continue
+
         try:
             session = get_session_api()
             wallet = session.get_wallet_balance(accountType="UNIFIED")["result"]["list"][0]
             balance = float(wallet["totalEquity"])
-            if highest_balance is None or balance > highest_balance:
-                highest_balance = balance
-            drawdown = (balance - highest_balance) / highest_balance
-            if drawdown < -0.005:
-                risk_mode = True
-                print("🛑 Balansas krito daugiau nei 0.5%, stabdome prekybą.")
-                time.sleep(30)
-                continue
-            elif drawdown >= 0:
-                risk_mode = False
+            balance_history.append(balance)
+            if len(balance_history) > 10:
+                balance_history.pop(0)
+
+            if len(balance_history) >= 2:
+                drop = (balance - balance_history[-2]) / balance_history[-2]
+                if drop < -0.0015:
+                    drop_count += 1
+                    print(f"❗Fiksuotas kritimas: {round(drop*100, 2)}%, kartas: {drop_count}")
+                else:
+                    drop_count = 0
+
+            if drop_count >= 4:
+                print("🛑 AI: Per daug kritimų, stabdom prekybą 5 min.")
+                market_blocked_until = time.time() + 300
+                drop_count = 0
+
+            if time.time() < market_blocked_until:
+                print("🚫 Prekyba sustabdyta. Laukiam rinkos atsigavimo...")
+                if check_market_sentiment():
+                    print("✅ Rinka atsigauna – leidžiama prekyba.")
+                    market_blocked_until = 0
+                else:
+                    time.sleep(30)
+                    continue
 
             symbols = fetch_top_symbols()
             for symbol in symbols:
                 time.sleep(0.4)
-                if risk_mode or (symbol in symbol_cooldowns and time.time() - symbol_cooldowns[symbol] < settings["cooldown"] * 60):
+                if symbol in symbol_cooldowns and time.time() - symbol_cooldowns[symbol] < settings["cooldown"] * 60:
                     continue
                 df = get_klines(symbol)
                 if df is None or len(df) < 50:
                     continue
+
                 score = 0
                 close = df["close"]
                 if RSIIndicator(close, window=14).rsi().iloc[-1] < 30:
@@ -159,9 +197,13 @@ def trading_loop():
                     score += 1
                 if ai_predict(df):
                     score += 2
+                volume = df["volume"].iloc[-1]
+                avg_volume = df["volume"].rolling(window=20).mean().iloc[-1]
+                if volume > avg_volume:
+                    score += 1
 
                 print(f"{symbol} balas: {score}")
-                if score >= 3:
+                if score >= 4:
                     qty = calculate_qty(symbol)
                     leverage = determine_leverage(score)
                     try:
@@ -175,12 +217,12 @@ def trading_loop():
             print(f"Klaida trading_loop: {e}")
         time.sleep(5)
 
-@app.route("/", methods=["GET", "POST"])
+@app.route("/", methods=["GET"])
 def index():
     return render_template("index.html")
 
 if __name__ == "__main__":
-    print("🔁 Boto ciklas paleistas automatiškai (serverio starto metu)")
+    print("🔁 Boto ciklas paleistas automatiškai")
     t = threading.Thread(target=trading_loop)
     t.daemon = True
     t.start()
