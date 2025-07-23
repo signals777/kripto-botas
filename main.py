@@ -76,7 +76,7 @@ def calculate_qty(symbol):
 def determine_leverage(score):
     if score >= 7:
         return 10
-    elif score >= 3:
+    elif score >= 4:
         return 5
     return 1
 
@@ -120,13 +120,13 @@ def ai_predict(df):
         print(f"Klaida AI modelyje: {e}")
         return False
 
-def market_condition_ok():
+def analyze_market():
     try:
         up_count = 0
         symbols = fetch_top_symbols()
         for symbol in symbols:
             df = get_klines(symbol)
-            if df is None or len(df) < 50:
+            if df is None or len(df) < 20:
                 continue
             rsi = RSIIndicator(df["close"]).rsi().iloc[-1]
             ema = EMAIndicator(df["close"], window=14).ema_indicator().iloc[-1]
@@ -140,37 +140,40 @@ def market_condition_ok():
         return False
 
 def trading_loop():
-    global bot_status, last_balance, drop_count, market_blocked_until
+    global bot_status, market_blocked_until, drop_count, last_balance
     while True:
-        if bot_status != "running" or time.time() < market_blocked_until:
+        if bot_status != "running":
+            time.sleep(3)
+            continue
+
+        now = time.time()
+        if now < market_blocked_until:
+            print("⏸️ Prekyba sustabdyta. AI analizuoja rinką...")
+            if analyze_market():
+                print("✅ AI: Rinka atsigauna – paleidžiama prekyba")
+                market_blocked_until = 0
+                drop_count = 0
+            else:
+                print("🔄 AI: Rinka vis dar krenta – laukiam dar 5 min.")
+                market_blocked_until = time.time() + 300
             time.sleep(5)
             continue
-        try:
-            if not market_condition_ok():
-                print("🔴 Rinka nestabili – prekyba sustabdyta")
-                time.sleep(60)
-                continue
 
+        try:
             session = get_session_api()
             wallet = session.get_wallet_balance(accountType="UNIFIED")["result"]["list"][0]
             balance = float(wallet["totalEquity"])
-            if last_balance is None:
-                last_balance = balance
 
-            change_pct = (balance - last_balance) / last_balance
-            if change_pct <= -0.0015:
-                drop_count += 1
-                print(f"⚠️ Fiksuotas kritimas: {change_pct*100:.2f}%, iš eilės: {drop_count}")
-                last_balance = balance
-            else:
-                drop_count = 0
-                last_balance = balance
-
-            if drop_count >= 4:
-                print("🛑 AI: Per daug kritimų, stabdom prekybą 5 min.")
-                market_blocked_until = time.time() + 300
-                drop_count = 0
-                continue
+            if last_balance is not None:
+                drop_pct = (last_balance - balance) / last_balance
+                if drop_pct >= 0.0015:
+                    drop_count += 1
+                    print(f"⚠️ Fiksuotas {drop_count} kritimas ({drop_pct*100:.2f}%)")
+                if drop_count >= 4:
+                    print("🛑 AI: Per daug kritimų, stabdom prekybą 5 min.")
+                    market_blocked_until = time.time() + 300
+                    drop_count = 0
+            last_balance = balance
 
             symbols = fetch_top_symbols()
             for symbol in symbols:
@@ -203,7 +206,7 @@ def trading_loop():
                     score += 1
 
                 print(f"{symbol} balas: {score}")
-                if score >= 3:
+                if score >= 4:
                     qty = calculate_qty(symbol)
                     leverage = determine_leverage(score)
                     try:
@@ -213,6 +216,7 @@ def trading_loop():
                         continue
                     place_order(symbol, "Buy", qty, settings["take_profit"], settings["stop_loss"])
                     symbol_cooldowns[symbol] = time.time()
+
         except Exception as e:
             print(f"Klaida trading_loop: {e}")
         time.sleep(5)
