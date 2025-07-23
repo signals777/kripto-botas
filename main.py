@@ -16,8 +16,8 @@ app = Flask(__name__)
 app.secret_key = "slaptas_raktas"
 app.permanent_session_lifetime = timedelta(minutes=60)
 
-api_key = "b2tL6abuyH7gEQjIC1"
-api_secret = "azEVdZmiRBlHID75zQehXHYYYKw0jB8DDFPJ"
+api_key = "TAVO_API_KEY"
+api_secret = "TAVO_API_SECRET"
 
 def get_session_api():
     return HTTP(api_key=api_key, api_secret=api_secret)
@@ -81,6 +81,9 @@ def determine_leverage(score):
     return 1
 
 def place_order(symbol, side, qty, tp_pct, sl_pct):
+    if time.time() < market_blocked_until:
+        print(f"🚫 Prekyba sustabdyta – neleidžiama vykdyti užsakymų: {symbol}")
+        return
     try:
         session = get_session_api()
         tickers = session.get_tickers(category="linear")["result"]["list"]
@@ -170,8 +173,8 @@ def trading_loop():
                     drop_count += 1
                     print(f"⚠️ Fiksuotas {drop_count} kritimas ({drop_pct*100:.2f}%)")
                 if drop_count >= 4:
-                    print("🛑 AI: Per daug kritimų, stabdom prekybą 5 min.")
-                    market_blocked_until = time.time() + 300
+                    print("🛑 AI: Per daug kritimų, stabdom prekybą 15 min.")
+                    market_blocked_until = time.time() + 900
                     drop_count = 0
             last_balance = balance
 
@@ -216,7 +219,6 @@ def trading_loop():
                         continue
                     place_order(symbol, "Buy", qty, settings["take_profit"], settings["stop_loss"])
                     symbol_cooldowns[symbol] = time.time()
-
         except Exception as e:
             print(f"Klaida trading_loop: {e}")
         time.sleep(5)
