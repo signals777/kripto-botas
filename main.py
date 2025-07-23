@@ -2,7 +2,7 @@ import os
 import time
 import math
 import threading
-from flask import Flask, render_template, request, redirect, url_for, session
+from flask import Flask, render_template
 from datetime import timedelta
 import pandas as pd
 import numpy as np
@@ -31,11 +31,10 @@ settings = {
 }
 
 symbol_cooldowns = {}
-highest_balance = None
-risk_mode = False
 bot_status = "running"
-drop_count = 0
 market_blocked_until = 0
+drop_count = 0
+last_balance = None
 
 def fetch_top_symbols():
     try:
@@ -67,7 +66,7 @@ def calculate_qty(symbol):
         wallet = session.get_wallet_balance(accountType="UNIFIED")["result"]["list"][0]
         balance = float(wallet["totalEquity"])
         usdt_amount = (balance * settings["position_size_pct"] / 100)
-        leverage = determine_leverage(5)
+        leverage = determine_leverage(0)
         qty = math.floor((usdt_amount * leverage) / last_price * 1000) / 1000
         return round(qty, 3)
     except Exception as e:
@@ -77,14 +76,15 @@ def calculate_qty(symbol):
 def determine_leverage(score):
     if score >= 7:
         return 10
-    elif score >= 5:
+    elif score >= 3:
         return 5
     return 1
 
 def place_order(symbol, side, qty, tp_pct, sl_pct):
     try:
         session = get_session_api()
-        price = float(session.get_tickers(category="linear")["result"]["list"][0]["lastPrice"])
+        tickers = session.get_tickers(category="linear")["result"]["list"]
+        price = float(next(t for t in tickers if t["symbol"] == symbol)["lastPrice"])
         tp_price = round(price * (1 + tp_pct), 4) if side == "Buy" else round(price * (1 - tp_pct), 4)
         sl_price = round(price * (1 - sl_pct), 4) if side == "Buy" else round(price * (1 + sl_pct), 4)
         session.place_order(
@@ -120,13 +120,13 @@ def ai_predict(df):
         print(f"Klaida AI modelyje: {e}")
         return False
 
-def analyze_market():
+def market_condition_ok():
     try:
-        symbols = fetch_top_symbols()
         up_count = 0
+        symbols = fetch_top_symbols()
         for symbol in symbols:
             df = get_klines(symbol)
-            if df is None or len(df) < 20:
+            if df is None or len(df) < 50:
                 continue
             rsi = RSIIndicator(df["close"]).rsi().iloc[-1]
             ema = EMAIndicator(df["close"], window=14).ema_indicator().iloc[-1]
@@ -140,55 +140,51 @@ def analyze_market():
         return False
 
 def trading_loop():
-    global highest_balance, risk_mode, bot_status, drop_count, market_blocked_until
+    global bot_status, last_balance, drop_count, market_blocked_until
     while True:
-        if bot_status != "running":
-            time.sleep(3)
+        if bot_status != "running" or time.time() < market_blocked_until:
+            time.sleep(5)
             continue
-
-        if time.time() < market_blocked_until:
-            print("🛑 Rinka blokuota – laukiam...")
-            time.sleep(10)
-            continue
-
         try:
+            if not market_condition_ok():
+                print("🔴 Rinka nestabili – prekyba sustabdyta")
+                time.sleep(60)
+                continue
+
             session = get_session_api()
             wallet = session.get_wallet_balance(accountType="UNIFIED")["result"]["list"][0]
             balance = float(wallet["totalEquity"])
-            if highest_balance is None or balance > highest_balance:
-                highest_balance = balance
+            if last_balance is None:
+                last_balance = balance
 
-            drawdown = (balance - highest_balance) / highest_balance
-            if drawdown < -0.005:
-                risk_mode = True
-                print("🛑 Balansas krito daugiau nei 0.5%, stabdome prekybą.")
-                time.sleep(30)
-                continue
-            elif drawdown < -0.0015:
+            change_pct = (balance - last_balance) / last_balance
+            if change_pct <= -0.0015:
                 drop_count += 1
-                print(f"⚠️ Fiksuotas kritimas: {drawdown:.4f} ({drop_count} kartas)")
-                if drop_count >= 4:
-                    print("🛑 AI: Per daug kritimų, stabdom prekybą 15 min.")
-                    market_blocked_until = time.time() + 900
-                    drop_count = 0
-                    continue
+                print(f"⚠️ Fiksuotas kritimas: {change_pct*100:.2f}%, iš eilės: {drop_count}")
+                last_balance = balance
             else:
                 drop_count = 0
-                risk_mode = False
+                last_balance = balance
 
-            if not analyze_market():
-                print("⚠️ Rinka nestabili, praleidžiam prekybą.")
-                time.sleep(30)
+            if drop_count >= 4:
+                print("🛑 AI: Per daug kritimų, stabdom prekybą 5 min.")
+                market_blocked_until = time.time() + 300
+                drop_count = 0
                 continue
 
             symbols = fetch_top_symbols()
             for symbol in symbols:
                 time.sleep(0.4)
-                if risk_mode or (symbol in symbol_cooldowns and time.time() - symbol_cooldowns[symbol] < settings["cooldown"] * 60):
+                if symbol in symbol_cooldowns and time.time() - symbol_cooldowns[symbol] < settings["cooldown"] * 60:
                     continue
                 df = get_klines(symbol)
                 if df is None or len(df) < 50:
                     continue
+
+                change_1h = (df["close"].iloc[-1] - df["close"].iloc[-4]) / df["close"].iloc[-4]
+                if change_1h < 0.015:
+                    continue
+
                 score = 0
                 close = df["close"]
                 if RSIIndicator(close, window=14).rsi().iloc[-1] < 30:
@@ -207,7 +203,7 @@ def trading_loop():
                     score += 1
 
                 print(f"{symbol} balas: {score}")
-                if score >= 5:
+                if score >= 3:
                     qty = calculate_qty(symbol)
                     leverage = determine_leverage(score)
                     try:
@@ -221,7 +217,7 @@ def trading_loop():
             print(f"Klaida trading_loop: {e}")
         time.sleep(5)
 
-@app.route("/", methods=["GET", "POST"])
+@app.route("/", methods=["GET"])
 def index():
     return render_template("index.html")
 
