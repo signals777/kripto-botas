@@ -16,7 +16,7 @@ app = Flask(__name__)
 app.secret_key = "slaptas_raktas"
 app.permanent_session_lifetime = timedelta(minutes=60)
 
-# 🛡️ API raktai
+# 🔐 API raktai
 api_key = "b2tL6abuyH7gEQjIC1"
 api_secret = "azEVdZmiRBlHID75zQehXHYYYKw0jB8DDFPJ"
 
@@ -28,16 +28,14 @@ settings = {
     "take_profit": 0.03,
     "stop_loss": 0.015,
     "n_pairs": 75,
-    "cooldown": 60,  # cooldown per valandą
     "max_trades_per_hour": 4,
 }
 
 symbol_cooldowns = {}
 bot_status = "running"
-market_blocked_until = 0
-drop_count = 0
 last_balance = None
 hourly_trade_counter = []
+open_positions = {}
 
 def fetch_top_symbols():
     try:
@@ -88,7 +86,7 @@ def place_order(symbol, side, qty, tp_pct, sl_pct):
         price = float(next(t for t in session.get_tickers(category="linear")["result"]["list"] if t["symbol"] == symbol)["lastPrice"])
         tp_price = round(price * (1 + tp_pct), 4)
         sl_price = round(price * (1 - sl_pct), 4)
-        session.place_order(
+        order = session.place_order(
             category="linear",
             symbol=symbol,
             side=side,
@@ -99,6 +97,11 @@ def place_order(symbol, side, qty, tp_pct, sl_pct):
             stopLoss=sl_price,
             reduceOnly=False
         )
+        open_positions[symbol] = {
+            "entry_price": price,
+            "max_profit": 0,
+            "qty": qty
+        }
         print(f"✅ Užsakymas: {symbol} {side} {qty}")
     except Exception as e:
         print(f"❌ Klaida place_order: {e}")
@@ -120,70 +123,80 @@ def ai_predict(df):
         print(f"Klaida AI modelyje: {e}")
         return False
 
-def analyze_market():
+def close_position(symbol):
     try:
-        up_count = 0
-        for symbol in fetch_top_symbols():
-            df = get_klines(symbol)
-            if df is None or len(df) < 20:
-                continue
-            rsi = RSIIndicator(df["close"]).rsi().iloc[-1]
-            ema = EMAIndicator(df["close"]).ema_indicator().iloc[-1]
-            if df["close"].iloc[-1] > ema and rsi > 50:
-                up_count += 1
-        print(f"📊 Rinkos analizė: {up_count} porų kyla")
-        return up_count >= 25
+        session = get_session_api()
+        qty = open_positions[symbol]["qty"]
+        session.place_order(
+            category="linear",
+            symbol=symbol,
+            side="Sell",
+            orderType="Market",
+            qty=qty,
+            timeInForce="GoodTillCancel",
+            reduceOnly=True
+        )
+        print(f"❎ Pozicija uždaryta: {symbol}")
+        del open_positions[symbol]
     except Exception as e:
-        print(f"Klaida rinkos analizėje: {e}")
-        return False
+        print(f"❌ Klaida close_position: {e}")
 
 def trading_loop():
-    global bot_status, market_blocked_until, drop_count, last_balance
+    global last_balance
     while True:
         if bot_status != "running":
             time.sleep(3)
             continue
 
-        now = time.time()
-        hourly_trade_counter[:] = [t for t in hourly_trade_counter if now - t < 3600]
-
-        if now < market_blocked_until:
-            print("🛑 Prekyba sustabdyta. AI analizuoja...")
-            if analyze_market():
-                market_blocked_until = 0
-                drop_count = 0
-                print("✅ Rinka atsigauna – paleidžiama prekyba")
-            else:
-                market_blocked_until = time.time() + 300
-                print("🔁 Laukiam dar 5 min.")
-            time.sleep(5)
-            continue
-
         try:
             session = get_session_api()
             balance = float(session.get_wallet_balance(accountType="UNIFIED")["result"]["list"][0]["totalEquity"])
-            if last_balance:
-                drop_pct = (last_balance - balance) / last_balance
-                if drop_pct >= 0.0015:
-                    drop_count += 1
-                    print(f"⚠️ Kritimas: {drop_pct*100:.2f}% ({drop_count}/3)")
-                if drop_count >= 3:
-                    market_blocked_until = time.time() + 300
-                    drop_count = 0
-            last_balance = balance
+
+            # ✅ Balanso saugumo apsauga: max 50% balanso prekyboje
+            used_balance = len(open_positions) * (balance * settings["position_size_pct"] / 100)
+            if used_balance > balance * 0.5:
+                print("🚫 Pasiekta 50% balanso riba – nauji sandoriai nestartuojami.")
+                time.sleep(10)
+                continue
+
+            # 🔍 Stebime esamas pozicijas
+            for symbol in list(open_positions.keys()):
+                df = get_klines(symbol)
+                if df is None:
+                    continue
+                entry = open_positions[symbol]["entry_price"]
+                current = df["close"].iloc[-1]
+                profit_pct = (current - entry) / entry
+                if profit_pct > open_positions[symbol]["max_profit"]:
+                    open_positions[symbol]["max_profit"] = profit_pct
+                max_profit = open_positions[symbol]["max_profit"]
+
+                if profit_pct >= 0.01:
+                    if profit_pct < max_profit - 0.002:
+                        print(f"📉 Progresyvus kritimas: {symbol} +{profit_pct:.2%} (max +{max_profit:.2%}) – PARDUODAM")
+                        close_position(symbol)
+                elif profit_pct <= -settings["stop_loss"]:
+                    print(f"🔻 Stop Loss: {symbol} {profit_pct:.2%}")
+                    close_position(symbol)
+
+            # ✅ Kas valandą nauji pirkimai (max 4)
+            now = time.time()
+            hourly_trade_counter[:] = [t for t in hourly_trade_counter if now - t < 3600]
+            if len(hourly_trade_counter) >= settings["max_trades_per_hour"]:
+                time.sleep(10)
+                continue
 
             symbols = fetch_top_symbols()
             trades = 0
             for symbol in symbols:
                 if trades >= settings["max_trades_per_hour"]:
                     break
-                if symbol in symbol_cooldowns and time.time() - symbol_cooldowns[symbol] < settings["cooldown"]:
+                if symbol in open_positions:
                     continue
                 df = get_klines(symbol)
                 if df is None or len(df) < 50:
                     continue
 
-                # Tikrinam ar pora žalia (≥1.5% per 1h)
                 change = (df["close"].iloc[-1] - df["close"].iloc[-2]) / df["close"].iloc[-2]
                 if change < 0.015:
                     continue
@@ -210,9 +223,9 @@ def trading_loop():
                         print(f"Sverto klaida {symbol}: {e}")
                         continue
                     place_order(symbol, "Buy", qty, settings["take_profit"], settings["stop_loss"])
-                    symbol_cooldowns[symbol] = time.time()
                     hourly_trade_counter.append(time.time())
                     trades += 1
+
         except Exception as e:
             print(f"Klaida trading_loop: {e}")
         time.sleep(5)
