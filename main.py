@@ -16,8 +16,8 @@ app = Flask(__name__)
 app.secret_key = "slaptas_raktas"
 app.permanent_session_lifetime = timedelta(minutes=60)
 
-api_key = "TAVO_API_KEY"
-api_secret = "TAVO_API_SECRET"
+api_key = "b2tL6abuyH7gEQjIC1"
+api_secret = "azEVdZmiRBlHID75zQehXHYYYKw0jB8DDFPJ"
 
 def get_session_api():
     return HTTP(api_key=api_key, api_secret=api_secret)
