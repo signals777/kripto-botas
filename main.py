@@ -5,13 +5,40 @@ import numpy as np
 import pandas as pd
 from pybit.unified_trading import HTTP
 from ta.trend import EMAIndicator
-from ta.momentum import RSIIndicator
 
 api_key = "8BF7HTSnuLzRIhfLaI"
 api_secret = "wL68dHNUyNqLFkUaRsSFX6vBxzeAQc3uHVxG"
 
 def get_session_api():
     return HTTP(api_key=api_key, api_secret=api_secret)
+
+def get_balance():
+    session = get_session_api()
+    try:
+        wallets = session.get_wallet_balance(accountType="UNIFIED")["result"]["list"][0]["coin"]
+        usdt = next((c for c in wallets if c["coin"] == "USDT"), None)
+        if usdt:
+            return float(usdt["availableToTrade"])
+        else:
+            return 0.0
+    except Exception as e:
+        print(f"❌ Balanso gavimo klaida: {e}")
+        return 0.0
+
+def calculate_qty(symbol, percent=8):
+    session = get_session_api()
+    try:
+        balance = get_balance()
+        usdt_amount = balance * percent / 100
+        tickers = session.get_tickers(category="linear")['result']['list']
+        price = next((float(t['lastPrice']) for t in tickers if t['symbol'] == symbol), None)
+        if not price:
+            return 0, 0
+        qty = round(usdt_amount / price, 3)
+        return qty, usdt_amount
+    except Exception as e:
+        print(f"❌ Qty klaida {symbol}: {e}")
+        return 0, 0
 
 def get_klines(symbol, interval="60", limit=200):
     session = get_session_api()
@@ -32,15 +59,13 @@ def get_klines(symbol, interval="60", limit=200):
         print(f"❌ Klaida get_klines({symbol}): {e}")
         return pd.DataFrame()
 
-def apply_filters(df):
+def apply_ema(df):
     try:
         ema = EMAIndicator(df['close'], window=20).ema_indicator()
-        rsi = RSIIndicator(df['close'], window=14).rsi()
         df['ema'] = ema
-        df['rsi'] = rsi
         return df
     except Exception as e:
-        print(f"❌ TA filtrų klaida: {e}")
+        print(f"❌ EMA klaida: {e}")
         return df
 
 def fetch_top_symbols(limit=75):
@@ -53,23 +78,10 @@ def fetch_top_symbols(limit=75):
         df = df[df['symbol'].str.endswith("USDT")]
         df = df[df['symbol'].str.isalpha()]
         top = df.sort_values("volume24h", ascending=False).head(limit)
-        return top['symbol'].tolist()
+        return top['symbol'].tolist(), top['symbol'].tolist()[:10]  # 75 ir top10
     except Exception as e:
         print(f"❌ Klaida fetch_top_symbols: {e}")
-        return []
-
-def calculate_qty(symbol, usdt_amount=20):
-    session = get_session_api()
-    try:
-        tickers = session.get_tickers(category="linear")['result']['list']
-        price = next((float(t['lastPrice']) for t in tickers if t['symbol'] == symbol), None)
-        if not price:
-            return 0
-        qty = round(usdt_amount / price, 3)
-        return qty
-    except Exception as e:
-        print(f"❌ Qty klaida {symbol}: {e}")
-        return 0
+        return [], []
 
 def open_position(symbol, qty):
     session = get_session_api()
@@ -109,7 +121,6 @@ def close_position(symbol, qty):
     except Exception as e:
         print(f"❌ Uždarymo klaida {symbol}: {e}")
 
-# Nauja – visų reikalingų porų kainos viena API užklausa!
 def get_last_prices(symbols):
     session = get_session_api()
     try:
@@ -124,54 +135,66 @@ def trading_loop():
     print("🚀 Botas paleistas!")
     opened_positions = {}
 
-    # Parametrai (galima koreguoti):
-    STOP_LOSS_PCT = -1          # -1 %
-    TAKE_PROFIT_PCT = 3         # +3 %
-    TRAILING_STOP_PCT = 0.8     # 0.8 % nuo max kainos
+    STOP_LOSS_PCT = -1     # -1 % nuo atidarymo
+    TRAILING_FROM_MAX = -1 # -1 % nuo max (progresyvus trailing)
+    BALANCE_LIMIT_PCT = 40
+    POSITION_PCT = 8       # 8 % balanso vienai pozicijai
+    MAX_POSITIONS = 5
 
     while True:
         now = datetime.datetime.utcnow()
         if now.minute == 0 and now.second < 10:
-            print(f"\n🕐 Nauja valanda {now.strftime('%H:%M:%S')} – ieškom 4 porų...")
+            print(f"\n🕐 Nauja valanda {now.strftime('%H:%M:%S')} – ieškom pozicijų...")
 
-            symbols = fetch_top_symbols()
+            symbols, lyderiai = fetch_top_symbols()
             selected = []
 
             for symbol in symbols:
                 if symbol in opened_positions:
-                    print(f"⏭️ {symbol} jau atidaryta, praleidžiam.")
                     continue
                 df = get_klines(symbol)
                 if df.empty:
                     continue
-                df = apply_filters(df)
+                df = apply_ema(df)
                 if df.empty:
                     continue
-
                 last = df.iloc[-1]
+                open1h = df.iloc[-2]['close']
+                price_now = last['close']
+                price_change_1h = (price_now - open1h) / open1h * 100
+                ema20 = last['ema']
+                volume_leader = symbol in lyderiai
+
                 score = 0
-                if last['rsi'] < 30:
+                if price_change_1h >= 1.5:
                     score += 1
-                if last['close'] > last['ema']:
+                if price_now > ema20:
                     score += 1
+                if volume_leader:
+                    score += 1
+
                 if score >= 2:
-                    selected.append((symbol, score))
+                    selected.append((symbol, score, price_change_1h, price_now, ema20, volume_leader))
 
-            selected = sorted(selected, key=lambda x: x[1], reverse=True)[:4]
+            selected = sorted(selected, key=lambda x: (x[1], x[2]), reverse=True)[:MAX_POSITIONS]
 
-            for symbol, score in selected:
+            balance = get_balance()
+            used_balance = 0
+            count_opened = 0
+
+            for symbol, score, price_change_1h, price_now, ema20, volume_leader in selected:
                 if symbol in opened_positions:
-                    print(f"⏭️ {symbol} jau atidaryta, praleidžiam.")
                     continue
-                qty = calculate_qty(symbol)
-                if qty > 0:
+                qty, usdt_amount = calculate_qty(symbol, percent=POSITION_PCT)
+                if qty > 0 and (used_balance + usdt_amount) <= (balance * BALANCE_LIMIT_PCT / 100) and count_opened < MAX_POSITIONS:
                     entry_price = open_position(symbol, qty)
                     if entry_price:
                         opened_positions[symbol] = (now, qty, entry_price, entry_price)
+                        used_balance += usdt_amount
+                        count_opened += 1
 
             time.sleep(60)
 
-        # Dabar visų atidarytų pozicijų kainas imam VIENA užklausa
         open_symbols = list(opened_positions.keys())
         last_prices = get_last_prices(open_symbols) if open_symbols else {}
 
@@ -182,38 +205,31 @@ def trading_loop():
             if last_price and entry_price:
                 price_change = (last_price - entry_price) / entry_price * 100
 
-                # 1. STOP LOSS
+                # 1. STOP LOSS nuo atidarymo kainos
                 if price_change <= STOP_LOSS_PCT:
-                    print(f"🛑 {symbol} kritimas daugiau nei {STOP_LOSS_PCT} % ({price_change:.2f} %), UŽDAROM!")
+                    print(f"🛑 {symbol} kritimas daugiau nei {STOP_LOSS_PCT} % nuo atidarymo ({price_change:.2f} %), UŽDAROM!")
                     close_position(symbol, qty)
                     del opened_positions[symbol]
                     continue
 
-                # 2. TAKE PROFIT
-                if price_change >= TAKE_PROFIT_PCT:
-                    print(f"✅ {symbol} pasiektas +{TAKE_PROFIT_PCT} % TP ({price_change:.2f} %), UŽDAROM!")
-                    close_position(symbol, qty)
-                    del opened_positions[symbol]
-                    continue
-
-                # 3. TRAILING STOP
+                # 2. Progresyvus trailing stop nuo max pelno
                 if last_price > max_price:
-                    max_price = last_price  # atnaujinam max_price
+                    max_price = last_price
                     opened_positions[symbol] = (open_time, qty, entry_price, max_price)
-
-                trailing_change = (last_price - max_price) / max_price * 100
-                if max_price > entry_price and trailing_change <= -TRAILING_STOP_PCT:
-                    print(f"🚩 {symbol} Trailing stop aktyvuotas ({trailing_change:.2f} % nuo max), UŽDAROM!")
+                trailing_from_max = (last_price - max_price) / max_price * 100
+                if max_price > entry_price and trailing_from_max <= TRAILING_FROM_MAX:
+                    print(f"🚩 {symbol} kritimas nuo max virš 1 %, UŽDAROM!")
                     close_position(symbol, qty)
                     del opened_positions[symbol]
                     continue
 
+            # 3. Uždarom po 1 valandos nepriklausomai nuo pelno/nuostolio
             if (now - open_time).seconds >= 3600:
                 print(f"⌛ {symbol} pozicijai suėjo 1 valanda, UŽDAROM.")
                 close_position(symbol, qty)
                 del opened_positions[symbol]
 
-        time.sleep(10)  # Čia 10 sekundžių – kaip ir norėjai!
+        time.sleep(10)
 
 if __name__ == "__main__":
     print("🚀 Botas paleistas!")
