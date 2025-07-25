@@ -12,13 +12,39 @@ api_secret = "wL68dHNUyNqLFkUaRsSFX6vBxzeAQc3uHVxG"
 def get_session_api():
     return HTTP(api_key=api_key, api_secret=api_secret)
 
+# --- Instrumentų info cache ---
+instruments_info = {}
+
+def get_symbol_info(symbol):
+    global instruments_info
+    if symbol in instruments_info:
+        return instruments_info[symbol]
+    session = get_session_api()
+    try:
+        info = session.get_instruments_info(category="linear", symbol=symbol)
+        if "result" in info and info["result"]["list"]:
+            item = info["result"]["list"][0]
+            min_qty = float(item["lotSizeFilter"]["minOrderQty"])
+            qty_step = float(item["lotSizeFilter"]["qtyStep"])
+            min_order_amt = float(item["minTradeAmt"])
+            max_leverage = int(float(item["leverageFilter"]["maxLeverage"]))
+            instruments_info[symbol] = (min_qty, qty_step, min_order_amt, max_leverage)
+            return min_qty, qty_step, min_order_amt, max_leverage
+        else:
+            print(f"⚠️ Nerasta instrumentų info {symbol}")
+            instruments_info[symbol] = (None, None, None, 1)
+            return None, None, None, 1
+    except Exception as e:
+        print(f"❌ Klaida get_symbol_info({symbol}): {e}")
+        instruments_info[symbol] = (None, None, None, 1)
+        return None, None, None, 1
+
 def get_balance():
     session = get_session_api()
     try:
         wallets = session.get_wallet_balance(accountType="UNIFIED")["result"]["list"][0]["coin"]
         usdt = next((c for c in wallets if c["coin"] == "USDT"), None)
         if usdt:
-            # Tikrinam visus galimus laukus, grąžinam pirmą rastą (tinka ir walletBalance!)
             for key in ["availableToTrade", "availableBalance", "walletBalance", "equity"]:
                 if key in usdt and usdt[key] is not None:
                     return float(usdt[key])
@@ -29,16 +55,29 @@ def get_balance():
         print(f"❌ Balanso gavimo klaida: {e}")
         return 0.0
 
+def round_qty(qty, qty_step):
+    if qty_step is None or qty_step == 0:
+        return qty
+    decimals = abs(int(np.log10(qty_step)))
+    return round(np.floor(qty / qty_step) * qty_step, decimals)
+
 def calculate_qty(symbol, percent=8):
     session = get_session_api()
     try:
+        min_qty, qty_step, min_order_amt, _ = get_symbol_info(symbol)
+        if min_qty is None or qty_step is None or min_order_amt is None:
+            print(f"⚠️ Trūksta min dydžio info {symbol}, skip.")
+            return 0, 0
         balance = get_balance()
         usdt_amount = balance * percent / 100
         tickers = session.get_tickers(category="linear")['result']['list']
         price = next((float(t['lastPrice']) for t in tickers if t['symbol'] == symbol), None)
         if not price:
             return 0, 0
-        qty = round(usdt_amount / price, 3)
+        qty = round_qty(usdt_amount / price, qty_step)
+        if qty < min_qty or (qty * price) < min_order_amt:
+            print(f"⚠️ Kiekis arba suma per maža {symbol} (qty={qty}, sum={qty*price:.3f}), skip.")
+            return 0, 0
         return qty, usdt_amount
     except Exception as e:
         print(f"❌ Qty klaida {symbol}: {e}")
@@ -90,8 +129,15 @@ def fetch_top_symbols(limit=75):
 def open_position(symbol, qty):
     session = get_session_api()
     try:
+        min_qty, qty_step, min_order_amt, max_leverage = get_symbol_info(symbol)
+        # Svertas: jei leidžia tik x1 – naudoja x1, jei daugiau – x5 arba max
+        lev = max_leverage
+        if lev > 5:
+            lev = 5
+        if lev < 1:
+            lev = 1
         try:
-            session.set_leverage(category="linear", symbol=symbol, buyLeverage=5, sellLeverage=5)
+            session.set_leverage(category="linear", symbol=symbol, buyLeverage=lev, sellLeverage=lev)
         except Exception as lev_err:
             print(f"⚠️ Sverto klaida {symbol}: {lev_err}")
         order = session.place_order(
@@ -103,7 +149,7 @@ def open_position(symbol, qty):
             timeInForce="GoodTillCancel"
         )
         entry_price = float(order['result']['avgPrice']) if order.get('result', {}).get('avgPrice') else None
-        print(f"✅ BUY: {symbol} kiekis: {qty} kaina: {entry_price}")
+        print(f"✅ BUY: {symbol} kiekis: {qty} kaina: {entry_price} svertas: x{lev}")
         return entry_price
     except Exception as e:
         print(f"❌ Orderio klaida {symbol}: {e}")
