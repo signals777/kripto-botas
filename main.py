@@ -26,7 +26,6 @@ def get_symbol_info(symbol):
             item = info["result"]["list"][0]
             min_qty = float(item["lotSizeFilter"]["minOrderQty"])
             qty_step = float(item["lotSizeFilter"]["qtyStep"])
-            # Tikrina ir minTradeAmt, ir minOrderAmt!
             min_order_amt = None
             for key in ["minTradeAmt", "minOrderAmt"]:
                 val = item.get(key)
@@ -118,7 +117,7 @@ def apply_ema(df):
         print(f"❌ EMA klaida: {e}")
         return df
 
-def fetch_top_symbols(limit=75):
+def fetch_top_symbols(limit=150):
     session = get_session_api()
     try:
         tickers = session.get_tickers(category="linear")['result']['list']
@@ -128,7 +127,7 @@ def fetch_top_symbols(limit=75):
         df = df[df['symbol'].str.endswith("USDT")]
         df = df[df['symbol'].str.isalpha()]
         top = df.sort_values("volume24h", ascending=False).head(limit)
-        return top['symbol'].tolist(), top['symbol'].tolist()[:10]  # 75 ir top10
+        return top['symbol'].tolist(), top['symbol'].tolist()[:10]
     except Exception as e:
         print(f"❌ Klaida fetch_top_symbols: {e}")
         return [], []
@@ -191,18 +190,20 @@ def trading_loop():
     print("🚀 Botas paleistas!")
     opened_positions = {}
 
-    STOP_LOSS_PCT = -1     # -1 % nuo atidarymo
-    TRAILING_FROM_MAX = -1 # -1 % nuo max (progresyvus trailing)
+    STOP_LOSS_PCT = -1
+    TRAILING_FROM_MAX = -1
     BALANCE_LIMIT_PCT = 40
-    POSITION_PCT = 8       # 8 % balanso vienai pozicijai
+    POSITION_PCT = 8
     MAX_POSITIONS = 5
+
+    main_thresholds = [1.5, 0.8, 0.5]  # ieškos iš eilės per 3 slenksčius
 
     while True:
         now = datetime.datetime.utcnow()
         if now.minute == 0 and now.second < 10:
             print(f"\n🕐 Nauja valanda {now.strftime('%H:%M:%S')} – ieškom pozicijų...")
 
-            symbols, lyderiai = fetch_top_symbols()
+            symbols, lyderiai = fetch_top_symbols(limit=150)
             selected = []
             total_checked = 0
             filtered_count = 0
@@ -210,52 +211,57 @@ def trading_loop():
             skipped_qty = 0
             skipped_filter = 0
 
-            for symbol in symbols:   # Eina per VISAS 75 poras!
-                if len(selected) >= MAX_POSITIONS:
-                    break
-                total_checked += 1
-                if symbol in opened_positions:
-                    continue
+            # Dabar ieško per 3 slenksčius kol suras bent 1–5 tinkamas poras
+            for threshold in main_thresholds:
+                selected = []
+                for symbol in symbols:
+                    total_checked += 1
+                    if symbol in opened_positions:
+                        continue
 
-                min_qty, qty_step, min_order_amt, max_leverage = get_symbol_info(symbol)
-                if min_qty is None or qty_step is None or min_order_amt is None:
-                    skipped_info += 1
-                    continue
+                    min_qty, qty_step, min_order_amt, max_leverage = get_symbol_info(symbol)
+                    if min_qty is None or qty_step is None or min_order_amt is None:
+                        skipped_info += 1
+                        continue
 
-                df = get_klines(symbol)
-                time.sleep(10)   # <-- API RATE LIMIT APSAUGA (10 s per porą)
-                if df.empty:
-                    print(f"⚠️ {symbol} – nėra žvakės, skip.")
-                    continue
-                df = apply_ema(df)
-                if df.empty:
-                    print(f"⚠️ {symbol} – EMA error, skip.")
-                    continue
-                last = df.iloc[-1]
-                open1h = df.iloc[-2]['close']
-                price_now = last['close']
-                price_change_1h = (price_now - open1h) / open1h * 100
-                ema20 = last['ema']
-                volume_leader = symbol in lyderiai
+                    df = get_klines(symbol)
+                    time.sleep(10)
+                    if df.empty:
+                        print(f"⚠️ {symbol} – nėra žvakės, skip.")
+                        continue
+                    df = apply_ema(df)
+                    if df.empty:
+                        print(f"⚠️ {symbol} – EMA error, skip.")
+                        continue
+                    last = df.iloc[-1]
+                    open1h = df.iloc[-2]['close']
+                    price_now = last['close']
+                    price_change_1h = (price_now - open1h) / open1h * 100
+                    ema20 = last['ema']
+                    volume_leader = symbol in lyderiai
 
-                score = 0
-                if price_change_1h >= 1.5:
-                    score += 1
-                if price_now > ema20:
-                    score += 1
-                if volume_leader:
-                    score += 1
+                    score = 0
+                    if price_change_1h >= threshold:
+                        score += 1
+                    if price_now > ema20:
+                        score += 1
+                    if volume_leader:
+                        score += 1
 
-                if score >= 2:
-                    filtered_count += 1
-                    selected.append((symbol, score, price_change_1h, price_now, ema20, volume_leader))
-                else:
-                    skipped_filter += 1
-                    print(f"⚠️ {symbol} – neatitinka filtrų, skip.")
+                    if score >= 2:
+                        filtered_count += 1
+                        selected.append((symbol, score, price_change_1h, price_now, ema20, volume_leader))
+                    else:
+                        skipped_filter += 1
+                        print(f"⚠️ {symbol} – neatitinka filtrų (threshold={threshold}), skip.")
+                    if len(selected) >= MAX_POSITIONS:
+                        break
+                if selected:
+                    print(f"Rasta su threshold {threshold}: {len(selected)} porų.")
+                    break  # Jeigu rado – nebetikrina mažesnių slenksčių
 
-            print(f"🔎 Patikrinta {total_checked} porų. Tinkamų: {filtered_count}. Skip dėl info: {skipped_info}, skip dėl filtrų: {skipped_filter}")
+            print(f"🔎 Patikrinta {total_checked} porų. Tinkamų: {len(selected)}. Skip dėl info: {skipped_info}, skip dėl filtrų: {skipped_filter}")
 
-            # Dabar selected gali būti iki 5 ir visi tik TINKAMI!
             selected = sorted(selected, key=lambda x: (x[1], x[2]), reverse=True)[:MAX_POSITIONS]
 
             balance = get_balance()
@@ -272,7 +278,7 @@ def trading_loop():
                         opened_positions[symbol] = (now, qty, entry_price, entry_price)
                         used_balance += usdt_amount
                         count_opened += 1
-                        time.sleep(2)  # --- API limit saugiklis tarp pirkimų!
+                        time.sleep(2)
 
             time.sleep(60)
 
@@ -286,7 +292,7 @@ def trading_loop():
             if last_price and entry_price:
                 price_change = (last_price - entry_price) / entry_price * 100
 
-                # 1. STOP LOSS nuo atidarymo kainos
+                # 1. STOP LOSS
                 if price_change <= STOP_LOSS_PCT:
                     print(f"🛑 {symbol} kritimas daugiau nei {STOP_LOSS_PCT} % nuo atidarymo ({price_change:.2f} %), UŽDAROM!")
                     close_position(symbol, qty)
