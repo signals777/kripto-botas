@@ -18,13 +18,11 @@ def get_balance():
         wallets = session.get_wallet_balance(accountType="UNIFIED")["result"]["list"][0]["coin"]
         usdt = next((c for c in wallets if c["coin"] == "USDT"), None)
         if usdt:
-            # Saugiai ima bet kurį lauką, kuris yra (jei nėra availableToTrade – ima availableBalance ar equity)
-            return float(
-                usdt.get("availableToTrade")
-                or usdt.get("availableBalance")
-                or usdt.get("equity")
-                or 0.0
-            )
+            # Tikrinam visus galimus laukus, grąžinam pirmą rastą (tinka ir walletBalance!)
+            for key in ["availableToTrade", "availableBalance", "walletBalance", "equity"]:
+                if key in usdt and usdt[key] is not None:
+                    return float(usdt[key])
+            return 0.0
         else:
             return 0.0
     except Exception as e:
@@ -159,7 +157,7 @@ def trading_loop():
                 if symbol in opened_positions:
                     continue
                 df = get_klines(symbol)
-                time.sleep(10)   # <-- ČIA API RATE LIMIT APSAUGA (10 s per porą)
+                time.sleep(10)   # <-- API RATE LIMIT APSAUGA (10 s per porą)
                 if df.empty:
                     continue
                 df = apply_ema(df)
