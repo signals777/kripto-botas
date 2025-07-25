@@ -18,7 +18,13 @@ def get_balance():
         wallets = session.get_wallet_balance(accountType="UNIFIED")["result"]["list"][0]["coin"]
         usdt = next((c for c in wallets if c["coin"] == "USDT"), None)
         if usdt:
-            return float(usdt["availableToTrade"])
+            # Saugiai ima bet kurį lauką, kuris yra (jei nėra availableToTrade – ima availableBalance ar equity)
+            return float(
+                usdt.get("availableToTrade")
+                or usdt.get("availableBalance")
+                or usdt.get("equity")
+                or 0.0
+            )
         else:
             return 0.0
     except Exception as e:
