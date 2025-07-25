@@ -26,7 +26,13 @@ def get_symbol_info(symbol):
             item = info["result"]["list"][0]
             min_qty = float(item["lotSizeFilter"]["minOrderQty"])
             qty_step = float(item["lotSizeFilter"]["qtyStep"])
-            min_order_amt = float(item["minTradeAmt"])
+            # Tikrina ir minTradeAmt, ir minOrderAmt!
+            min_order_amt = None
+            for key in ["minTradeAmt", "minOrderAmt"]:
+                val = item.get(key)
+                if val is not None:
+                    min_order_amt = float(val)
+                    break
             max_leverage = int(float(item["leverageFilter"]["maxLeverage"]))
             instruments_info[symbol] = (min_qty, qty_step, min_order_amt, max_leverage)
             return min_qty, qty_step, min_order_amt, max_leverage
@@ -73,6 +79,7 @@ def calculate_qty(symbol, percent=8):
         tickers = session.get_tickers(category="linear")['result']['list']
         price = next((float(t['lastPrice']) for t in tickers if t['symbol'] == symbol), None)
         if not price:
+            print(f"⚠️ Nerasta kainos {symbol}, skip.")
             return 0, 0
         qty = round_qty(usdt_amount / price, qty_step)
         if qty < min_qty or (qty * price) < min_order_amt:
@@ -130,7 +137,6 @@ def open_position(symbol, qty):
     session = get_session_api()
     try:
         min_qty, qty_step, min_order_amt, max_leverage = get_symbol_info(symbol)
-        # Svertas: jei leidžia tik x1 – naudoja x1, jei daugiau – x5 arba max
         lev = max_leverage
         if lev > 5:
             lev = 5
@@ -198,16 +204,32 @@ def trading_loop():
 
             symbols, lyderiai = fetch_top_symbols()
             selected = []
+            total_checked = 0
+            filtered_count = 0
+            skipped_info = 0
+            skipped_qty = 0
+            skipped_filter = 0
 
             for symbol in symbols:   # Eina per VISAS 75 poras!
+                if len(selected) >= MAX_POSITIONS:
+                    break
+                total_checked += 1
                 if symbol in opened_positions:
                     continue
+
+                min_qty, qty_step, min_order_amt, max_leverage = get_symbol_info(symbol)
+                if min_qty is None or qty_step is None or min_order_amt is None:
+                    skipped_info += 1
+                    continue
+
                 df = get_klines(symbol)
                 time.sleep(10)   # <-- API RATE LIMIT APSAUGA (10 s per porą)
                 if df.empty:
+                    print(f"⚠️ {symbol} – nėra žvakės, skip.")
                     continue
                 df = apply_ema(df)
                 if df.empty:
+                    print(f"⚠️ {symbol} – EMA error, skip.")
                     continue
                 last = df.iloc[-1]
                 open1h = df.iloc[-2]['close']
@@ -225,8 +247,15 @@ def trading_loop():
                     score += 1
 
                 if score >= 2:
+                    filtered_count += 1
                     selected.append((symbol, score, price_change_1h, price_now, ema20, volume_leader))
+                else:
+                    skipped_filter += 1
+                    print(f"⚠️ {symbol} – neatitinka filtrų, skip.")
 
+            print(f"🔎 Patikrinta {total_checked} porų. Tinkamų: {filtered_count}. Skip dėl info: {skipped_info}, skip dėl filtrų: {skipped_filter}")
+
+            # Dabar selected gali būti iki 5 ir visi tik TINKAMI!
             selected = sorted(selected, key=lambda x: (x[1], x[2]), reverse=True)[:MAX_POSITIONS]
 
             balance = get_balance()
@@ -243,6 +272,7 @@ def trading_loop():
                         opened_positions[symbol] = (now, qty, entry_price, entry_price)
                         used_balance += usdt_amount
                         count_opened += 1
+                        time.sleep(2)  # --- API limit saugiklis tarp pirkimų!
 
             time.sleep(60)
 
