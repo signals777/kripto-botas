@@ -22,30 +22,14 @@ def get_symbol_info(symbol):
     session = get_session_api()
     try:
         info = session.get_instruments_info(category="linear", symbol=symbol)
-        # --- Pilnas debug logas ---
-        print(f"\nDEBUG: {symbol} instrument info API atsakymas:\n{info}\n")
         if "result" in info and info["result"]["list"]:
             item = info["result"]["list"][0]
-            print(f"DEBUG: {symbol} fields: {list(item.keys())}")
-            required_keys = [
-                "lotSizeFilter", "minTradeAmt", "minOrderAmt", "leverageFilter"
-            ]
-            for key in required_keys:
-                if key not in item:
-                    print(f"⚠️ Trūksta lauko '{key}' {symbol} instrumente!")
-            # Standardiniai laukų ištraukimas su saugia logika
             min_qty = float(item["lotSizeFilter"]["minOrderQty"]) if "lotSizeFilter" in item and "minOrderQty" in item["lotSizeFilter"] else None
             qty_step = float(item["lotSizeFilter"]["qtyStep"]) if "lotSizeFilter" in item and "qtyStep" in item["lotSizeFilter"] else None
-            # Tikrina ir minTradeAmt, ir minOrderAmt
-            min_order_amt = None
-            for key in ["minTradeAmt", "minOrderAmt"]:
-                val = item.get(key)
-                if val is not None:
-                    min_order_amt = float(val)
-                    break
+            min_notional = float(item["lotSizeFilter"]["minNotionalValue"]) if "lotSizeFilter" in item and "minNotionalValue" in item["lotSizeFilter"] else 5
             max_leverage = int(float(item["leverageFilter"]["maxLeverage"])) if "leverageFilter" in item and "maxLeverage" in item["leverageFilter"] else 1
-            instruments_info[symbol] = (min_qty, qty_step, min_order_amt, max_leverage)
-            return min_qty, qty_step, min_order_amt, max_leverage
+            instruments_info[symbol] = (min_qty, qty_step, min_notional, max_leverage)
+            return min_qty, qty_step, min_notional, max_leverage
         else:
             print(f"⚠️ Nerasta instrumentų info {symbol}")
             instruments_info[symbol] = (None, None, None, 1)
@@ -80,8 +64,8 @@ def round_qty(qty, qty_step):
 def calculate_qty(symbol, percent=8):
     session = get_session_api()
     try:
-        min_qty, qty_step, min_order_amt, _ = get_symbol_info(symbol)
-        if min_qty is None or qty_step is None or min_order_amt is None:
+        min_qty, qty_step, min_notional, _ = get_symbol_info(symbol)
+        if min_qty is None or qty_step is None or min_notional is None:
             print(f"⚠️ Trūksta min dydžio info {symbol}, skip.")
             return 0, 0
         balance = get_balance()
@@ -92,7 +76,7 @@ def calculate_qty(symbol, percent=8):
             print(f"⚠️ Nerasta kainos {symbol}, skip.")
             return 0, 0
         qty = round_qty(usdt_amount / price, qty_step)
-        if qty < min_qty or (qty * price) < min_order_amt:
+        if qty < min_qty or (qty * price) < min_notional:
             print(f"⚠️ Kiekis arba suma per maža {symbol} (qty={qty}, sum={qty*price:.3f}), skip.")
             return 0, 0
         return qty, usdt_amount
@@ -146,7 +130,7 @@ def fetch_top_symbols(limit=75):
 def open_position(symbol, qty):
     session = get_session_api()
     try:
-        min_qty, qty_step, min_order_amt, max_leverage = get_symbol_info(symbol)
+        min_qty, qty_step, min_notional, max_leverage = get_symbol_info(symbol)
         lev = max_leverage
         if lev > 5:
             lev = 5
@@ -212,7 +196,7 @@ def trading_loop():
         if now.minute == 0 and now.second < 10:
             print(f"\n🕐 Nauja valanda {now.strftime('%H:%M:%S')} – ieškom pozicijų...")
 
-            symbols, lyderiai = fetch_top_symbols(limit=150)  # per 150 porų
+            symbols, lyderiai = fetch_top_symbols()
             selected = []
             total_checked = 0
             filtered_count = 0
@@ -220,13 +204,13 @@ def trading_loop():
             skipped_qty = 0
             skipped_filter = 0
 
-            for symbol in symbols:   # Eina per VISAS 150 porų!
+            for symbol in symbols:   # Eina per VISAS 75 poras!
                 total_checked += 1
                 if symbol in opened_positions:
                     continue
 
-                min_qty, qty_step, min_order_amt, max_leverage = get_symbol_info(symbol)
-                if min_qty is None or qty_step is None or min_order_amt is None:
+                min_qty, qty_step, min_notional, max_leverage = get_symbol_info(symbol)
+                if min_qty is None or qty_step is None or min_notional is None:
                     skipped_info += 1
                     continue
 
