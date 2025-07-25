@@ -22,17 +22,28 @@ def get_symbol_info(symbol):
     session = get_session_api()
     try:
         info = session.get_instruments_info(category="linear", symbol=symbol)
+        # --- Pilnas debug logas ---
+        print(f"\nDEBUG: {symbol} instrument info API atsakymas:\n{info}\n")
         if "result" in info and info["result"]["list"]:
             item = info["result"]["list"][0]
-            min_qty = float(item["lotSizeFilter"]["minOrderQty"])
-            qty_step = float(item["lotSizeFilter"]["qtyStep"])
+            print(f"DEBUG: {symbol} fields: {list(item.keys())}")
+            required_keys = [
+                "lotSizeFilter", "minTradeAmt", "minOrderAmt", "leverageFilter"
+            ]
+            for key in required_keys:
+                if key not in item:
+                    print(f"⚠️ Trūksta lauko '{key}' {symbol} instrumente!")
+            # Standardiniai laukų ištraukimas su saugia logika
+            min_qty = float(item["lotSizeFilter"]["minOrderQty"]) if "lotSizeFilter" in item and "minOrderQty" in item["lotSizeFilter"] else None
+            qty_step = float(item["lotSizeFilter"]["qtyStep"]) if "lotSizeFilter" in item and "qtyStep" in item["lotSizeFilter"] else None
+            # Tikrina ir minTradeAmt, ir minOrderAmt
             min_order_amt = None
             for key in ["minTradeAmt", "minOrderAmt"]:
                 val = item.get(key)
                 if val is not None:
                     min_order_amt = float(val)
                     break
-            max_leverage = int(float(item["leverageFilter"]["maxLeverage"]))
+            max_leverage = int(float(item["leverageFilter"]["maxLeverage"])) if "leverageFilter" in item and "maxLeverage" in item["leverageFilter"] else 1
             instruments_info[symbol] = (min_qty, qty_step, min_order_amt, max_leverage)
             return min_qty, qty_step, min_order_amt, max_leverage
         else:
@@ -117,7 +128,7 @@ def apply_ema(df):
         print(f"❌ EMA klaida: {e}")
         return df
 
-def fetch_top_symbols(limit=150):
+def fetch_top_symbols(limit=75):
     session = get_session_api()
     try:
         tickers = session.get_tickers(category="linear")['result']['list']
@@ -127,7 +138,7 @@ def fetch_top_symbols(limit=150):
         df = df[df['symbol'].str.endswith("USDT")]
         df = df[df['symbol'].str.isalpha()]
         top = df.sort_values("volume24h", ascending=False).head(limit)
-        return top['symbol'].tolist(), top['symbol'].tolist()[:10]
+        return top['symbol'].tolist(), top['symbol'].tolist()[:10]  # 75 ir top10
     except Exception as e:
         print(f"❌ Klaida fetch_top_symbols: {e}")
         return [], []
@@ -190,20 +201,18 @@ def trading_loop():
     print("🚀 Botas paleistas!")
     opened_positions = {}
 
-    STOP_LOSS_PCT = -1
-    TRAILING_FROM_MAX = -1
+    STOP_LOSS_PCT = -1     # -1 % nuo atidarymo
+    TRAILING_FROM_MAX = -1 # -1 % nuo max (progresyvus trailing)
     BALANCE_LIMIT_PCT = 40
-    POSITION_PCT = 8
+    POSITION_PCT = 8       # 8 % balanso vienai pozicijai
     MAX_POSITIONS = 5
-
-    main_thresholds = [1.5, 0.8, 0.5]  # ieškos iš eilės per 3 slenksčius
 
     while True:
         now = datetime.datetime.utcnow()
         if now.minute == 0 and now.second < 10:
             print(f"\n🕐 Nauja valanda {now.strftime('%H:%M:%S')} – ieškom pozicijų...")
 
-            symbols, lyderiai = fetch_top_symbols(limit=150)
+            symbols, lyderiai = fetch_top_symbols(limit=150)  # per 150 porų
             selected = []
             total_checked = 0
             filtered_count = 0
@@ -211,56 +220,48 @@ def trading_loop():
             skipped_qty = 0
             skipped_filter = 0
 
-            # Dabar ieško per 3 slenksčius kol suras bent 1–5 tinkamas poras
-            for threshold in main_thresholds:
-                selected = []
-                for symbol in symbols:
-                    total_checked += 1
-                    if symbol in opened_positions:
-                        continue
+            for symbol in symbols:   # Eina per VISAS 150 porų!
+                total_checked += 1
+                if symbol in opened_positions:
+                    continue
 
-                    min_qty, qty_step, min_order_amt, max_leverage = get_symbol_info(symbol)
-                    if min_qty is None or qty_step is None or min_order_amt is None:
-                        skipped_info += 1
-                        continue
+                min_qty, qty_step, min_order_amt, max_leverage = get_symbol_info(symbol)
+                if min_qty is None or qty_step is None or min_order_amt is None:
+                    skipped_info += 1
+                    continue
 
-                    df = get_klines(symbol)
-                    time.sleep(10)
-                    if df.empty:
-                        print(f"⚠️ {symbol} – nėra žvakės, skip.")
-                        continue
-                    df = apply_ema(df)
-                    if df.empty:
-                        print(f"⚠️ {symbol} – EMA error, skip.")
-                        continue
-                    last = df.iloc[-1]
-                    open1h = df.iloc[-2]['close']
-                    price_now = last['close']
-                    price_change_1h = (price_now - open1h) / open1h * 100
-                    ema20 = last['ema']
-                    volume_leader = symbol in lyderiai
+                df = get_klines(symbol)
+                time.sleep(10)   # <-- API RATE LIMIT APSAUGA (10 s per porą)
+                if df.empty:
+                    print(f"⚠️ {symbol} – nėra žvakės, skip.")
+                    continue
+                df = apply_ema(df)
+                if df.empty:
+                    print(f"⚠️ {symbol} – EMA error, skip.")
+                    continue
+                last = df.iloc[-1]
+                open1h = df.iloc[-2]['close']
+                price_now = last['close']
+                price_change_1h = (price_now - open1h) / open1h * 100
+                ema20 = last['ema']
+                volume_leader = symbol in lyderiai
 
-                    score = 0
-                    if price_change_1h >= threshold:
-                        score += 1
-                    if price_now > ema20:
-                        score += 1
-                    if volume_leader:
-                        score += 1
+                score = 0
+                if price_change_1h >= 1.5:
+                    score += 1
+                if price_now > ema20:
+                    score += 1
+                if volume_leader:
+                    score += 1
 
-                    if score >= 2:
-                        filtered_count += 1
-                        selected.append((symbol, score, price_change_1h, price_now, ema20, volume_leader))
-                    else:
-                        skipped_filter += 1
-                        print(f"⚠️ {symbol} – neatitinka filtrų (threshold={threshold}), skip.")
-                    if len(selected) >= MAX_POSITIONS:
-                        break
-                if selected:
-                    print(f"Rasta su threshold {threshold}: {len(selected)} porų.")
-                    break  # Jeigu rado – nebetikrina mažesnių slenksčių
+                if score >= 2:
+                    filtered_count += 1
+                    selected.append((symbol, score, price_change_1h, price_now, ema20, volume_leader))
+                else:
+                    skipped_filter += 1
+                    print(f"⚠️ {symbol} – neatitinka filtrų, skip.")
 
-            print(f"🔎 Patikrinta {total_checked} porų. Tinkamų: {len(selected)}. Skip dėl info: {skipped_info}, skip dėl filtrų: {skipped_filter}")
+            print(f"🔎 Patikrinta {total_checked} porų. Tinkamų: {filtered_count}. Skip dėl info: {skipped_info}, skip dėl filtrų: {skipped_filter}")
 
             selected = sorted(selected, key=lambda x: (x[1], x[2]), reverse=True)[:MAX_POSITIONS]
 
@@ -278,7 +279,7 @@ def trading_loop():
                         opened_positions[symbol] = (now, qty, entry_price, entry_price)
                         used_balance += usdt_amount
                         count_opened += 1
-                        time.sleep(2)
+                        time.sleep(2)  # --- API limit saugiklis tarp pirkimų!
 
             time.sleep(60)
 
@@ -292,7 +293,7 @@ def trading_loop():
             if last_price and entry_price:
                 price_change = (last_price - entry_price) / entry_price * 100
 
-                # 1. STOP LOSS
+                # 1. STOP LOSS nuo atidarymo kainos
                 if price_change <= STOP_LOSS_PCT:
                     print(f"🛑 {symbol} kritimas daugiau nei {STOP_LOSS_PCT} % nuo atidarymo ({price_change:.2f} %), UŽDAROM!")
                     close_position(symbol, qty)
