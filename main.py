@@ -149,10 +149,11 @@ def trading_loop():
             symbols, lyderiai = fetch_top_symbols()
             selected = []
 
-            for symbol in symbols:
+            for symbol in symbols:   # Eina per VISAS 75 poras!
                 if symbol in opened_positions:
                     continue
                 df = get_klines(symbol)
+                time.sleep(10)   # <-- ČIA API RATE LIMIT APSAUGA (10 s per porą)
                 if df.empty:
                     continue
                 df = apply_ema(df)
