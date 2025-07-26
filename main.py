@@ -61,28 +61,35 @@ def round_qty(qty, qty_step):
     decimals = abs(int(np.log10(qty_step)))
     return round(np.floor(qty / qty_step) * qty_step, decimals)
 
-def calculate_qty(symbol, percent=8):
-    session = get_session_api()
-    try:
-        min_qty, qty_step, min_notional, _ = get_symbol_info(symbol)
-        if min_qty is None or qty_step is None or min_notional is None:
-            print(f"⚠️ Trūksta min dydžio info {symbol}, skip.")
-            return 0, 0
-        balance = get_balance()
-        usdt_amount = balance * percent / 100
-        tickers = session.get_tickers(category="linear")['result']['list']
-        price = next((float(t['lastPrice']) for t in tickers if t['symbol'] == symbol), None)
-        if not price:
-            print(f"⚠️ Nerasta kainos {symbol}, skip.")
-            return 0, 0
-        qty = round_qty(usdt_amount / price, qty_step)
-        if qty < min_qty or (qty * price) < min_notional:
-            print(f"⚠️ Kiekis arba suma per maža {symbol} (qty={qty}, sum={qty*price:.3f}), skip.")
-            return 0, 0
-        return qty, usdt_amount
-    except Exception as e:
-        print(f"❌ Qty klaida {symbol}: {e}")
+def auto_position_percent(balance, min_notional, max_positions=5, max_balance_pct=40):
+    # Maksimalus galimų pozicijų kiekis pagal balansą ir bybit minimalų dydį
+    max_possible = int((balance * max_balance_pct / 100) // min_notional)
+    if max_possible < 1:
+        max_possible = 1
+    elif max_possible > max_positions:
+        max_possible = max_positions
+    # Procentas vienai pozicijai
+    percent = (min_notional / balance) * 100
+    percent = min(percent, max_balance_pct / max_possible)
+    return percent, max_possible
+
+def calculate_qty(symbol, balance, percent):
+    min_qty, qty_step, min_notional, _ = get_symbol_info(symbol)
+    if min_qty is None or qty_step is None or min_notional is None:
+        print(f"⚠️ Trūksta min dydžio info {symbol}, skip.")
         return 0, 0
+    session = get_session_api()
+    usdt_amount = balance * percent / 100
+    tickers = session.get_tickers(category="linear")['result']['list']
+    price = next((float(t['lastPrice']) for t in tickers if t['symbol'] == symbol), None)
+    if not price:
+        print(f"⚠️ Nerasta kainos {symbol}, skip.")
+        return 0, 0
+    qty = round_qty(usdt_amount / price, qty_step)
+    if qty < min_qty or (qty * price) < min_notional:
+        print(f"⚠️ Kiekis arba suma per maža {symbol} (qty={qty}, sum={qty*price:.3f}), skip.")
+        return 0, 0
+    return qty, usdt_amount
 
 def get_klines(symbol, interval="60", limit=200):
     session = get_session_api()
@@ -185,10 +192,9 @@ def trading_loop():
     print("🚀 Botas paleistas!")
     opened_positions = {}
 
-    STOP_LOSS_PCT = -1     # -1 % nuo atidarymo
-    TRAILING_FROM_MAX = -1 # -1 % nuo max (progresyvus trailing)
+    STOP_LOSS_PCT = -1
+    TRAILING_FROM_MAX = -1
     BALANCE_LIMIT_PCT = 40
-    POSITION_PCT = 8       # 8 % balanso vienai pozicijai
     MAX_POSITIONS = 5
 
     while True:
@@ -197,6 +203,15 @@ def trading_loop():
             print(f"\n🕐 Nauja valanda {now.strftime('%H:%M:%S')} – ieškom pozicijų...")
 
             symbols, lyderiai = fetch_top_symbols(limit=150)
+            min_notional = 5
+            balance = get_balance()
+            for symbol in symbols:
+                min_qty, qty_step, min_notional_sym, _ = get_symbol_info(symbol)
+                if min_notional_sym and min_notional_sym < min_notional:
+                    min_notional = min_notional_sym
+            percent, max_theory_positions = auto_position_percent(balance, min_notional, MAX_POSITIONS, BALANCE_LIMIT_PCT)
+            print(f"ℹ️ Balansas: {balance:.2f} USDT | Galimos max pozicijos: {max_theory_positions} | Vienai pozicijai bus skirta ~{percent:.2f}%")
+
             selected = []
             total_checked = 0
             filtered_count = 0
@@ -204,33 +219,19 @@ def trading_loop():
             skipped_qty = 0
             skipped_filter = 0
 
-            balance = get_balance()
-            min_pos_usdt = 1000
-            for symbol in symbols:
-                min_qty, qty_step, min_notional, max_leverage = get_symbol_info(symbol)
-                if min_notional and min_notional < min_pos_usdt:
-                    min_pos_usdt = min_notional
-            max_theory_positions = int((balance * BALANCE_LIMIT_PCT / 100) // max(min_pos_usdt, 1))
-            if max_theory_positions == 0:
-                print(f"⚠️ Balansas per mažas net minimaliam sandoriui ({min_pos_usdt:.2f} USDT). Sandoriai neatidaromi.")
-            else:
-                print(f"ℹ️ Balansas: {balance:.2f} USDT | Galimos max pozicijos: {max_theory_positions} | "
-                      f"Išnaudos iki {BALANCE_LIMIT_PCT}% balanso ({balance * BALANCE_LIMIT_PCT / 100:.2f} USDT)")
-
-            # Ieškom ne tik +1.5%, bet ir nuo +0.5%
             for symbol in symbols:
                 total_checked += 1
                 if symbol in opened_positions:
                     continue
 
-                min_qty, qty_step, min_notional, max_leverage = get_symbol_info(symbol)
-                if min_qty is None or qty_step is None or min_notional is None:
+                min_qty, qty_step, min_notional_s, max_leverage = get_symbol_info(symbol)
+                if min_qty is None or qty_step is None or min_notional_s is None:
                     skipped_info += 1
                     print(f"⚠️ {symbol}: Trūksta min dydžio info, skip.")
                     continue
 
                 df = get_klines(symbol)
-                time.sleep(3)   # Sumažinta, kad greičiau, bet neperžengtų rate limit
+                time.sleep(2)   # API saugiklis
                 if df.empty:
                     print(f"⚠️ {symbol} – nėra žvakės, skip.")
                     continue
@@ -271,7 +272,7 @@ def trading_loop():
             for symbol, score, price_change_1h, price_now, ema20, volume_leader in selected:
                 if symbol in opened_positions:
                     continue
-                qty, usdt_amount = calculate_qty(symbol, percent=POSITION_PCT)
+                qty, usdt_amount = calculate_qty(symbol, balance, percent)
                 if qty > 0 and (used_balance + usdt_amount) <= (balance * BALANCE_LIMIT_PCT / 100) and count_opened < max_open:
                     entry_price = open_position(symbol, qty)
                     if entry_price:
