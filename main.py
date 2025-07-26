@@ -12,7 +12,6 @@ api_secret = "wL68dHNUyNqLFkUaRsSFX6vBxzeAQc3uHVxG"
 def get_session_api():
     return HTTP(api_key=api_key, api_secret=api_secret)
 
-# --- Instrumentų info cache ---
 instruments_info = {}
 
 def get_symbol_info(symbol):
@@ -61,13 +60,15 @@ def round_qty(qty, qty_step):
     decimals = abs(int(np.log10(qty_step)))
     return round(np.floor(qty / qty_step) * qty_step, decimals)
 
-def calculate_qty(symbol, usdt_amount):
+def calculate_qty(symbol, percent=10):
     session = get_session_api()
     try:
         min_qty, qty_step, min_notional, _ = get_symbol_info(symbol)
         if min_qty is None or qty_step is None or min_notional is None:
             print(f"⚠️ Trūksta min dydžio info {symbol}, skip.")
             return 0, 0
+        balance = get_balance()
+        usdt_amount = balance * percent / 100
         tickers = session.get_tickers(category="linear")['result']['list']
         price = next((float(t['lastPrice']) for t in tickers if t['symbol'] == symbol), None)
         if not price:
@@ -110,7 +111,7 @@ def apply_ema(df):
         print(f"❌ EMA klaida: {e}")
         return df
 
-def fetch_top_symbols(limit=150):
+def fetch_top_symbols(limit=100):
     session = get_session_api()
     try:
         tickers = session.get_tickers(category="linear")['result']['list']
@@ -120,7 +121,7 @@ def fetch_top_symbols(limit=150):
         df = df[df['symbol'].str.endswith("USDT")]
         df = df[df['symbol'].str.isalpha()]
         top = df.sort_values("volume24h", ascending=False).head(limit)
-        return top['symbol'].tolist(), top['symbol'].tolist()[:10]
+        return top['symbol'].tolist(), top['symbol'].tolist()[:10]  # visas sąrašas ir TOP10
     except Exception as e:
         print(f"❌ Klaida fetch_top_symbols: {e}")
         return [], []
@@ -129,11 +130,7 @@ def open_position(symbol, qty):
     session = get_session_api()
     try:
         min_qty, qty_step, min_notional, max_leverage = get_symbol_info(symbol)
-        lev = max_leverage
-        if lev > 5:
-            lev = 5
-        if lev < 1:
-            lev = 1
+        lev = 5  # Naudojamas x5 svertas
         try:
             session.set_leverage(category="linear", symbol=symbol, buyLeverage=lev, sellLeverage=lev)
         except Exception as lev_err:
@@ -182,140 +179,59 @@ def get_last_prices(symbols):
 def trading_loop():
     print("🚀 Botas paleistas!")
     opened_positions = {}
-
-    STOP_LOSS_PCT = -1     # -1 % nuo atidarymo
-    TRAILING_FROM_MAX = -1 # -1 % nuo max (progresyvus trailing)
-    MAX_POSITIONS = 2      # Dabar fiksuota – perka tik iki 2 pozicijų
+    TARGET_PROFIT_PCT = 1      # Uždaryti kai +1%
+    POSITION_PCT = 10          # 10% balanso vienai pozicijai
+    symbol_in_position = None  # Tik viena pozicija
 
     while True:
         now = datetime.datetime.utcnow()
-        if now.minute == 0 and now.second < 10:
-            print(f"\n🕐 Nauja valanda {now.strftime('%H:%M:%S')} – ieškom pozicijų...")
-
-            symbols, lyderiai = fetch_top_symbols(limit=150)
-            selected = []
-            total_checked = 0
-            filtered_count = 0
-            skipped_info = 0
-            skipped_filter = 0
-
-            balance = get_balance()
-            min_pos_usdt = 1000
+        if symbol_in_position is None:
+            symbols, lyderiai = fetch_top_symbols(limit=100)  # gaunam visą ir TOP10
             for symbol in symbols:
-                min_qty, qty_step, min_notional, max_leverage = get_symbol_info(symbol)
-                if min_notional and min_notional < min_pos_usdt:
-                    min_pos_usdt = min_notional
-
-            # Skaičiuojam kiek galime realiai pozicijų atidaryti
-            if balance >= min_pos_usdt * 2:
-                n_positions = 2
-                usdt_per_position = balance / 2
-            elif balance >= min_pos_usdt:
-                n_positions = 1
-                usdt_per_position = balance
-            else:
-                n_positions = 0
-                usdt_per_position = 0
-                print(f"⚠️ Balansas per mažas net vienai pozicijai ({min_pos_usdt:.2f} USDT)")
-
-            # Ieškom poras nuo +0.5 % pokyčio (1h) ir filtruojam
-            for symbol in symbols:
-                total_checked += 1
-                if symbol in opened_positions:
-                    continue
-
                 min_qty, qty_step, min_notional, max_leverage = get_symbol_info(symbol)
                 if min_qty is None or qty_step is None or min_notional is None:
-                    skipped_info += 1
-                    print(f"⚠️ {symbol}: Trūksta min dydžio info, skip.")
                     continue
 
                 df = get_klines(symbol)
-                time.sleep(2.5)
+                time.sleep(1.5)
                 if df.empty:
-                    print(f"⚠️ {symbol} – nėra žvakės, skip.")
                     continue
                 df = apply_ema(df)
                 if df.empty:
-                    print(f"⚠️ {symbol} – EMA error, skip.")
                     continue
                 last = df.iloc[-1]
                 open1h = df.iloc[-2]['close']
                 price_now = last['close']
                 price_change_1h = (price_now - open1h) / open1h * 100
                 ema20 = last['ema']
-                volume_leader = symbol in lyderiai
 
-                score = 0
-                if price_change_1h >= 0.5:
-                    score += 1
-                if price_now > ema20:
-                    score += 1
-                if volume_leader:
-                    score += 1
+                # FILTRAI
+                filter1 = price_change_1h >= 0.5
+                filter2 = price_now > ema20
+                filter3 = symbol in lyderiai
+                print(f"{symbol}: 1h change={price_change_1h:.2f}%, EMA20={ema20:.4f}, TOP10={filter3} | Filtrai: {filter1} {filter2} {filter3}")
 
-                if score >= 2:
-                    filtered_count += 1
-                    selected.append((symbol, score, price_change_1h, price_now, ema20, volume_leader))
-                else:
-                    skipped_filter += 1
-                    print(f"⚠️ {symbol} – neatitinka filtrų (change: {price_change_1h:.2f}%), skip.")
-
-            print(f"🔎 Patikrinta {total_checked} porų. Tinkamų: {filtered_count}. Skip dėl info: {skipped_info}, skip dėl filtrų: {skipped_filter}")
-
-            # Atidarom TIK tiek, kiek leidžia balansas (max 2)
-            if filtered_count == 0 or n_positions == 0:
-                print("⚠️ Nėra tinkamų porų arba per mažas balansas. Nepirks.")
-            else:
-                count_opened = 0
-                for symbol, score, price_change_1h, price_now, ema20, volume_leader in selected[:n_positions]:
-                    if symbol in opened_positions:
-                        continue
-                    qty, usdt_amount = calculate_qty(symbol, usdt_per_position)
-                    if qty > 0 and count_opened < n_positions:
+                if filter1 and filter2 and filter3:
+                    qty, usdt_amount = calculate_qty(symbol, percent=POSITION_PCT)
+                    if qty > 0:
                         entry_price = open_position(symbol, qty)
                         if entry_price:
-                            opened_positions[symbol] = (now, qty, entry_price, entry_price)
-                            count_opened += 1
-                            time.sleep(1.2)
-                if count_opened == 0:
-                    print("⚠️ Nepavyko atidaryti nė vienos pozicijos: balansas arba porų dydis per mažas.")
+                            opened_positions[symbol] = (datetime.datetime.utcnow(), qty, entry_price)
+                            symbol_in_position = symbol
+                            break
 
-            time.sleep(60)
-
-        open_symbols = list(opened_positions.keys())
-        last_prices = get_last_prices(open_symbols) if open_symbols else {}
-
-        for symbol in open_symbols:
-            open_time, qty, entry_price, max_price = opened_positions[symbol]
-            now = datetime.datetime.utcnow()
-            last_price = last_prices.get(symbol, None)
+        else:
+            open_time, qty, entry_price = opened_positions[symbol_in_position]
+            last_price = get_last_prices([symbol_in_position]).get(symbol_in_position, None)
             if last_price and entry_price:
                 price_change = (last_price - entry_price) / entry_price * 100
-
-                # 1. STOP LOSS nuo atidarymo kainos
-                if price_change <= STOP_LOSS_PCT:
-                    print(f"🛑 {symbol} kritimas daugiau nei {STOP_LOSS_PCT} % nuo atidarymo ({price_change:.2f} %), UŽDAROM!")
-                    close_position(symbol, qty)
-                    del opened_positions[symbol]
-                    continue
-
-                # 2. Progresyvus trailing stop nuo max pelno
-                if last_price > max_price:
-                    max_price = last_price
-                    opened_positions[symbol] = (open_time, qty, entry_price, max_price)
-                trailing_from_max = (last_price - max_price) / max_price * 100
-                if max_price > entry_price and trailing_from_max <= TRAILING_FROM_MAX:
-                    print(f"🚩 {symbol} kritimas nuo max virš 1 %, UŽDAROM!")
-                    close_position(symbol, qty)
-                    del opened_positions[symbol]
-                    continue
-
-            # 3. Uždarom po 1 valandos nepriklausomai nuo pelno/nuostolio
-            if (now - open_time).seconds >= 3600:
-                print(f"⌛ {symbol} pozicijai suėjo 1 valanda, UŽDAROM.")
-                close_position(symbol, qty)
-                del opened_positions[symbol]
+                profit_pct = price_change * 5  # x5 svertas
+                print(f"🔄 {symbol_in_position} P/L={profit_pct:.2f}% (su svertu), kaina: {last_price} (entry: {entry_price})")
+                if price_change >= TARGET_PROFIT_PCT / 100:
+                    print(f"🎯 {symbol_in_position} pasiekė +{TARGET_PROFIT_PCT}% (x5 svertas ~{profit_pct:.2f}%), parduodam!")
+                    close_position(symbol_in_position, qty)
+                    del opened_positions[symbol_in_position]
+                    symbol_in_position = None
 
         time.sleep(10)
 
