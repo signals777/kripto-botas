@@ -61,35 +61,26 @@ def round_qty(qty, qty_step):
     decimals = abs(int(np.log10(qty_step)))
     return round(np.floor(qty / qty_step) * qty_step, decimals)
 
-def auto_position_percent(balance, min_notional, max_positions=5, max_balance_pct=40):
-    # Maksimalus galimų pozicijų kiekis pagal balansą ir bybit minimalų dydį
-    max_possible = int((balance * max_balance_pct / 100) // min_notional)
-    if max_possible < 1:
-        max_possible = 1
-    elif max_possible > max_positions:
-        max_possible = max_positions
-    # Procentas vienai pozicijai
-    percent = (min_notional / balance) * 100
-    percent = min(percent, max_balance_pct / max_possible)
-    return percent, max_possible
-
-def calculate_qty(symbol, balance, percent):
-    min_qty, qty_step, min_notional, _ = get_symbol_info(symbol)
-    if min_qty is None or qty_step is None or min_notional is None:
-        print(f"⚠️ Trūksta min dydžio info {symbol}, skip.")
-        return 0, 0
+def calculate_qty(symbol, usdt_amount):
     session = get_session_api()
-    usdt_amount = balance * percent / 100
-    tickers = session.get_tickers(category="linear")['result']['list']
-    price = next((float(t['lastPrice']) for t in tickers if t['symbol'] == symbol), None)
-    if not price:
-        print(f"⚠️ Nerasta kainos {symbol}, skip.")
+    try:
+        min_qty, qty_step, min_notional, _ = get_symbol_info(symbol)
+        if min_qty is None or qty_step is None or min_notional is None:
+            print(f"⚠️ Trūksta min dydžio info {symbol}, skip.")
+            return 0, 0
+        tickers = session.get_tickers(category="linear")['result']['list']
+        price = next((float(t['lastPrice']) for t in tickers if t['symbol'] == symbol), None)
+        if not price:
+            print(f"⚠️ Nerasta kainos {symbol}, skip.")
+            return 0, 0
+        qty = round_qty(usdt_amount / price, qty_step)
+        if qty < min_qty or (qty * price) < min_notional:
+            print(f"⚠️ Kiekis arba suma per maža {symbol} (qty={qty}, sum={qty*price:.3f}), skip.")
+            return 0, 0
+        return qty, usdt_amount
+    except Exception as e:
+        print(f"❌ Qty klaida {symbol}: {e}")
         return 0, 0
-    qty = round_qty(usdt_amount / price, qty_step)
-    if qty < min_qty or (qty * price) < min_notional:
-        print(f"⚠️ Kiekis arba suma per maža {symbol} (qty={qty}, sum={qty*price:.3f}), skip.")
-        return 0, 0
-    return qty, usdt_amount
 
 def get_klines(symbol, interval="60", limit=200):
     session = get_session_api()
@@ -119,7 +110,7 @@ def apply_ema(df):
         print(f"❌ EMA klaida: {e}")
         return df
 
-def fetch_top_symbols(limit=100):
+def fetch_top_symbols(limit=150):
     session = get_session_api()
     try:
         tickers = session.get_tickers(category="linear")['result']['list']
@@ -192,46 +183,52 @@ def trading_loop():
     print("🚀 Botas paleistas!")
     opened_positions = {}
 
-    STOP_LOSS_PCT = -1
-    TRAILING_FROM_MAX = -1
-    BALANCE_LIMIT_PCT = 40
-    MAX_POSITIONS = 5
+    STOP_LOSS_PCT = -1     # -1 % nuo atidarymo
+    TRAILING_FROM_MAX = -1 # -1 % nuo max (progresyvus trailing)
+    # NEBENAUDOJAM BALANCE_LIMIT_PCT, naudojam VISĄ balansą
+    MAX_TOP_SYMBOLS = 150
 
     while True:
         now = datetime.datetime.utcnow()
         if now.minute == 0 and now.second < 10:
             print(f"\n🕐 Nauja valanda {now.strftime('%H:%M:%S')} – ieškom pozicijų...")
 
-            symbols, lyderiai = fetch_top_symbols(limit=150)
-            min_notional = 5
-            balance = get_balance()
-            for symbol in symbols:
-                min_qty, qty_step, min_notional_sym, _ = get_symbol_info(symbol)
-                if min_notional_sym and min_notional_sym < min_notional:
-                    min_notional = min_notional_sym
-            percent, max_theory_positions = auto_position_percent(balance, min_notional, MAX_POSITIONS, BALANCE_LIMIT_PCT)
-            print(f"ℹ️ Balansas: {balance:.2f} USDT | Galimos max pozicijos: {max_theory_positions} | Vienai pozicijai bus skirta ~{percent:.2f}%")
-
+            symbols, lyderiai = fetch_top_symbols(limit=MAX_TOP_SYMBOLS)
             selected = []
             total_checked = 0
             filtered_count = 0
             skipped_info = 0
-            skipped_qty = 0
             skipped_filter = 0
 
+            balance = get_balance()
+            min_pos_usdt = 1000
+            # Surandam mažiausią reikalingą sumą vienam sandoriui tarp visų top porų
+            for symbol in symbols:
+                min_qty, qty_step, min_notional, max_leverage = get_symbol_info(symbol)
+                if min_notional and min_notional < min_pos_usdt:
+                    min_pos_usdt = min_notional
+            # Automatinis galimų pozicijų kiekis pagal balansą ir min_notional
+            max_theory_positions = int(balance // max(min_pos_usdt, 1))
+            if max_theory_positions == 0:
+                print(f"⚠️ Balansas per mažas net minimaliam sandoriui ({min_pos_usdt:.2f} USDT). Sandoriai neatidaromi.")
+            else:
+                print(f"ℹ️ Balansas: {balance:.2f} USDT | Galimos max pozicijos: {max_theory_positions} | "
+                      f"Skiriama ~{balance / max_theory_positions:.2f} USDT vienai pozicijai")
+
+            # Ieškom nuo +0.5% pokyčio per valandą
             for symbol in symbols:
                 total_checked += 1
                 if symbol in opened_positions:
                     continue
 
-                min_qty, qty_step, min_notional_s, max_leverage = get_symbol_info(symbol)
-                if min_qty is None or qty_step is None or min_notional_s is None:
+                min_qty, qty_step, min_notional, max_leverage = get_symbol_info(symbol)
+                if min_qty is None or qty_step is None or min_notional is None:
                     skipped_info += 1
                     print(f"⚠️ {symbol}: Trūksta min dydžio info, skip.")
                     continue
 
                 df = get_klines(symbol)
-                time.sleep(2)   # API saugiklis
+                time.sleep(2.5)
                 if df.empty:
                     print(f"⚠️ {symbol} – nėra žvakės, skip.")
                     continue
@@ -263,23 +260,27 @@ def trading_loop():
 
             print(f"🔎 Patikrinta {total_checked} porų. Tinkamų: {filtered_count}. Skip dėl info: {skipped_info}, skip dėl filtrų: {skipped_filter}")
 
-            max_open = min(MAX_POSITIONS, max_theory_positions)
-            selected = sorted(selected, key=lambda x: (x[1], x[2]), reverse=True)[:max_open]
-
-            used_balance = 0
-            count_opened = 0
-
-            for symbol, score, price_change_1h, price_now, ema20, volume_leader in selected:
-                if symbol in opened_positions:
-                    continue
-                qty, usdt_amount = calculate_qty(symbol, balance, percent)
-                if qty > 0 and (used_balance + usdt_amount) <= (balance * BALANCE_LIMIT_PCT / 100) and count_opened < max_open:
-                    entry_price = open_position(symbol, qty)
-                    if entry_price:
-                        opened_positions[symbol] = (now, qty, entry_price, entry_price)
-                        used_balance += usdt_amount
-                        count_opened += 1
-                        time.sleep(2)  # --- API limit saugiklis tarp pirkimų!
+            # Kiek iš tikro galim atidaryti pozicijų
+            max_open = max(1, min(filtered_count, max_theory_positions))
+            if filtered_count == 0 or max_open == 0:
+                print("⚠️ Nėra tinkamų porų. Nepirks.")
+            else:
+                used_balance = 0
+                count_opened = 0
+                usdt_per_position = balance / max_open
+                for symbol, score, price_change_1h, price_now, ema20, volume_leader in selected[:max_open]:
+                    if symbol in opened_positions:
+                        continue
+                    qty, usdt_amount = calculate_qty(symbol, usdt_per_position)
+                    if qty > 0 and count_opened < max_open:
+                        entry_price = open_position(symbol, qty)
+                        if entry_price:
+                            opened_positions[symbol] = (now, qty, entry_price, entry_price)
+                            used_balance += usdt_amount
+                            count_opened += 1
+                            time.sleep(1.2)
+                if count_opened == 0:
+                    print("⚠️ Nepavyko atidaryti nė vienos pozicijos: balansas arba porų dydis per mažas.")
 
             time.sleep(60)
 
