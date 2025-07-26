@@ -112,7 +112,7 @@ def apply_ema(df):
         print(f"❌ EMA klaida: {e}")
         return df
 
-def fetch_top_symbols(limit=75):
+def fetch_top_symbols(limit=100):
     session = get_session_api()
     try:
         tickers = session.get_tickers(category="linear")['result']['list']
@@ -122,7 +122,7 @@ def fetch_top_symbols(limit=75):
         df = df[df['symbol'].str.endswith("USDT")]
         df = df[df['symbol'].str.isalpha()]
         top = df.sort_values("volume24h", ascending=False).head(limit)
-        return top['symbol'].tolist(), top['symbol'].tolist()[:10]  # 75 ir top10
+        return top['symbol'].tolist(), top['symbol'].tolist()[:10]
     except Exception as e:
         print(f"❌ Klaida fetch_top_symbols: {e}")
         return [], []
@@ -196,7 +196,7 @@ def trading_loop():
         if now.minute == 0 and now.second < 10:
             print(f"\n🕐 Nauja valanda {now.strftime('%H:%M:%S')} – ieškom pozicijų...")
 
-            symbols, lyderiai = fetch_top_symbols()
+            symbols, lyderiai = fetch_top_symbols(limit=150)
             selected = []
             total_checked = 0
             filtered_count = 0
@@ -204,7 +204,21 @@ def trading_loop():
             skipped_qty = 0
             skipped_filter = 0
 
-            for symbol in symbols:   # Eina per VISAS 75 poras!
+            balance = get_balance()
+            min_pos_usdt = 1000
+            for symbol in symbols:
+                min_qty, qty_step, min_notional, max_leverage = get_symbol_info(symbol)
+                if min_notional and min_notional < min_pos_usdt:
+                    min_pos_usdt = min_notional
+            max_theory_positions = int((balance * BALANCE_LIMIT_PCT / 100) // max(min_pos_usdt, 1))
+            if max_theory_positions == 0:
+                print(f"⚠️ Balansas per mažas net minimaliam sandoriui ({min_pos_usdt:.2f} USDT). Sandoriai neatidaromi.")
+            else:
+                print(f"ℹ️ Balansas: {balance:.2f} USDT | Galimos max pozicijos: {max_theory_positions} | "
+                      f"Išnaudos iki {BALANCE_LIMIT_PCT}% balanso ({balance * BALANCE_LIMIT_PCT / 100:.2f} USDT)")
+
+            # Ieškom ne tik +1.5%, bet ir nuo +0.5%
+            for symbol in symbols:
                 total_checked += 1
                 if symbol in opened_positions:
                     continue
@@ -212,10 +226,11 @@ def trading_loop():
                 min_qty, qty_step, min_notional, max_leverage = get_symbol_info(symbol)
                 if min_qty is None or qty_step is None or min_notional is None:
                     skipped_info += 1
+                    print(f"⚠️ {symbol}: Trūksta min dydžio info, skip.")
                     continue
 
                 df = get_klines(symbol)
-                time.sleep(10)   # <-- API RATE LIMIT APSAUGA (10 s per porą)
+                time.sleep(3)   # Sumažinta, kad greičiau, bet neperžengtų rate limit
                 if df.empty:
                     print(f"⚠️ {symbol} – nėra žvakės, skip.")
                     continue
@@ -231,7 +246,7 @@ def trading_loop():
                 volume_leader = symbol in lyderiai
 
                 score = 0
-                if price_change_1h >= 1.5:
+                if price_change_1h >= 0.5:
                     score += 1
                 if price_now > ema20:
                     score += 1
@@ -243,13 +258,13 @@ def trading_loop():
                     selected.append((symbol, score, price_change_1h, price_now, ema20, volume_leader))
                 else:
                     skipped_filter += 1
-                    print(f"⚠️ {symbol} – neatitinka filtrų, skip.")
+                    print(f"⚠️ {symbol} – neatitinka filtrų (change: {price_change_1h:.2f}%), skip.")
 
             print(f"🔎 Patikrinta {total_checked} porų. Tinkamų: {filtered_count}. Skip dėl info: {skipped_info}, skip dėl filtrų: {skipped_filter}")
 
-            selected = sorted(selected, key=lambda x: (x[1], x[2]), reverse=True)[:MAX_POSITIONS]
+            max_open = min(MAX_POSITIONS, max_theory_positions)
+            selected = sorted(selected, key=lambda x: (x[1], x[2]), reverse=True)[:max_open]
 
-            balance = get_balance()
             used_balance = 0
             count_opened = 0
 
@@ -257,7 +272,7 @@ def trading_loop():
                 if symbol in opened_positions:
                     continue
                 qty, usdt_amount = calculate_qty(symbol, percent=POSITION_PCT)
-                if qty > 0 and (used_balance + usdt_amount) <= (balance * BALANCE_LIMIT_PCT / 100) and count_opened < MAX_POSITIONS:
+                if qty > 0 and (used_balance + usdt_amount) <= (balance * BALANCE_LIMIT_PCT / 100) and count_opened < max_open:
                     entry_price = open_position(symbol, qty)
                     if entry_price:
                         opened_positions[symbol] = (now, qty, entry_price, entry_price)
