@@ -185,15 +185,14 @@ def trading_loop():
 
     STOP_LOSS_PCT = -1     # -1 % nuo atidarymo
     TRAILING_FROM_MAX = -1 # -1 % nuo max (progresyvus trailing)
-    # NEBENAUDOJAM BALANCE_LIMIT_PCT, naudojam VISĄ balansą
-    MAX_TOP_SYMBOLS = 150
+    MAX_POSITIONS = 2      # Dabar fiksuota – perka tik iki 2 pozicijų
 
     while True:
         now = datetime.datetime.utcnow()
         if now.minute == 0 and now.second < 10:
             print(f"\n🕐 Nauja valanda {now.strftime('%H:%M:%S')} – ieškom pozicijų...")
 
-            symbols, lyderiai = fetch_top_symbols(limit=MAX_TOP_SYMBOLS)
+            symbols, lyderiai = fetch_top_symbols(limit=150)
             selected = []
             total_checked = 0
             filtered_count = 0
@@ -202,20 +201,24 @@ def trading_loop():
 
             balance = get_balance()
             min_pos_usdt = 1000
-            # Surandam mažiausią reikalingą sumą vienam sandoriui tarp visų top porų
             for symbol in symbols:
                 min_qty, qty_step, min_notional, max_leverage = get_symbol_info(symbol)
                 if min_notional and min_notional < min_pos_usdt:
                     min_pos_usdt = min_notional
-            # Automatinis galimų pozicijų kiekis pagal balansą ir min_notional
-            max_theory_positions = int(balance // max(min_pos_usdt, 1))
-            if max_theory_positions == 0:
-                print(f"⚠️ Balansas per mažas net minimaliam sandoriui ({min_pos_usdt:.2f} USDT). Sandoriai neatidaromi.")
-            else:
-                print(f"ℹ️ Balansas: {balance:.2f} USDT | Galimos max pozicijos: {max_theory_positions} | "
-                      f"Skiriama ~{balance / max_theory_positions:.2f} USDT vienai pozicijai")
 
-            # Ieškom nuo +0.5% pokyčio per valandą
+            # Skaičiuojam kiek galime realiai pozicijų atidaryti
+            if balance >= min_pos_usdt * 2:
+                n_positions = 2
+                usdt_per_position = balance / 2
+            elif balance >= min_pos_usdt:
+                n_positions = 1
+                usdt_per_position = balance
+            else:
+                n_positions = 0
+                usdt_per_position = 0
+                print(f"⚠️ Balansas per mažas net vienai pozicijai ({min_pos_usdt:.2f} USDT)")
+
+            # Ieškom poras nuo +0.5 % pokyčio (1h) ir filtruojam
             for symbol in symbols:
                 total_checked += 1
                 if symbol in opened_positions:
@@ -260,23 +263,19 @@ def trading_loop():
 
             print(f"🔎 Patikrinta {total_checked} porų. Tinkamų: {filtered_count}. Skip dėl info: {skipped_info}, skip dėl filtrų: {skipped_filter}")
 
-            # Kiek iš tikro galim atidaryti pozicijų
-            max_open = max(1, min(filtered_count, max_theory_positions))
-            if filtered_count == 0 or max_open == 0:
-                print("⚠️ Nėra tinkamų porų. Nepirks.")
+            # Atidarom TIK tiek, kiek leidžia balansas (max 2)
+            if filtered_count == 0 or n_positions == 0:
+                print("⚠️ Nėra tinkamų porų arba per mažas balansas. Nepirks.")
             else:
-                used_balance = 0
                 count_opened = 0
-                usdt_per_position = balance / max_open
-                for symbol, score, price_change_1h, price_now, ema20, volume_leader in selected[:max_open]:
+                for symbol, score, price_change_1h, price_now, ema20, volume_leader in selected[:n_positions]:
                     if symbol in opened_positions:
                         continue
                     qty, usdt_amount = calculate_qty(symbol, usdt_per_position)
-                    if qty > 0 and count_opened < max_open:
+                    if qty > 0 and count_opened < n_positions:
                         entry_price = open_position(symbol, qty)
                         if entry_price:
                             opened_positions[symbol] = (now, qty, entry_price, entry_price)
-                            used_balance += usdt_amount
                             count_opened += 1
                             time.sleep(1.2)
                 if count_opened == 0:
