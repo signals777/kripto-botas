@@ -121,7 +121,7 @@ def fetch_top_symbols(limit=100):
         df = df[df['symbol'].str.endswith("USDT")]
         df = df[df['symbol'].str.isalpha()]
         top = df.sort_values("volume24h", ascending=False).head(limit)
-        return top['symbol'].tolist(), top['symbol'].tolist()[:10]  # visas sąrašas ir TOP10
+        return top['symbol'].tolist(), top['symbol'].tolist()[:15]  # visas sąrašas ir TOP15
     except Exception as e:
         print(f"❌ Klaida fetch_top_symbols: {e}")
         return [], []
@@ -180,7 +180,7 @@ def trading_loop():
     print("🚀 Botas paleistas!")
     opened_positions = {}
     TARGET_PROFIT_PCT = 1      # Uždaryti kai +1%
-    POSITION_PCT = 10          # 10% balanso vienai pozicijai
+    POSITION_PCT = 40          # 40% balanso vienai pozicijai
     symbol_in_position = None  # Tik viena pozicija
 
     while True:
