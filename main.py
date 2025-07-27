@@ -192,7 +192,7 @@ def trading_loop():
 
     TARGET_PROFIT_PCT = 0.7     # +0,7 % take profit
     STOP_LOSS_PCT = -0.7        # -0,7 % stop loss
-    POSITION_PCT = 10           # 10 % balanso per poziciją
+    POSITION_PCT = 60           # 60 % balanso per poziciją
     symbol_in_position = None
 
     while True:
