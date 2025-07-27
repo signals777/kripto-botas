@@ -5,7 +5,7 @@ import numpy as np
 import pandas as pd
 from pybit.unified_trading import HTTP
 from ta.trend import EMAIndicator
-from ta.momentum import RSIIndicator
+from ta.volatility import AverageTrueRange
 
 api_key = "8BF7HTSnuLzRIhfLaI"
 api_secret = "wL68dHNUyNqLFkUaRsSFX6vBxzeAQc3uHVxG"
@@ -13,7 +13,7 @@ api_secret = "wL68dHNUyNqLFkUaRsSFX6vBxzeAQc3uHVxG"
 def get_session_api():
     return HTTP(api_key=api_key, api_secret=api_secret)
 
-# --- Instrumentų info cache ---
+# Instrumentų info cache
 instruments_info = {}
 
 def get_symbol_info(symbol):
@@ -32,12 +32,11 @@ def get_symbol_info(symbol):
             instruments_info[symbol] = (min_qty, qty_step, min_notional, max_leverage)
             return min_qty, qty_step, min_notional, max_leverage
         else:
-            print(f"⚠️ Nerasta instrumentų info {symbol}")
             instruments_info[symbol] = (None, None, None, 1)
             return None, None, None, 1
     except Exception as e:
-        print(f"❌ Klaida get_symbol_info({symbol}): {e}")
         instruments_info[symbol] = (None, None, None, 1)
+        print(f"❌ Klaida get_symbol_info({symbol}): {e}")
         return None, None, None, 1
 
 def get_balance():
@@ -62,7 +61,7 @@ def round_qty(qty, qty_step):
     decimals = abs(int(np.log10(qty_step)))
     return round(np.floor(qty / qty_step) * qty_step, decimals)
 
-def calculate_qty(symbol, percent=40):
+def calculate_qty(symbol, percent=10):
     session = get_session_api()
     try:
         min_qty, qty_step, min_notional, _ = get_symbol_info(symbol)
@@ -85,7 +84,7 @@ def calculate_qty(symbol, percent=40):
         print(f"❌ Qty klaida {symbol}: {e}")
         return 0, 0
 
-def get_klines(symbol, interval="60", limit=200):
+def get_klines(symbol, interval="1", limit=10):
     session = get_session_api()
     try:
         response = session.get_kline(
@@ -98,29 +97,12 @@ def get_klines(symbol, interval="60", limit=200):
         df.columns = ['timestamp','open','high','low','close','volume','turnover']
         df = df.iloc[::-1]
         df['close'] = df['close'].astype(float)
+        df['high'] = df['high'].astype(float)
+        df['low'] = df['low'].astype(float)
         df['volume'] = df['volume'].astype(float)
         return df
     except Exception as e:
         print(f"❌ Klaida get_klines({symbol}): {e}")
-        return pd.DataFrame()
-
-def get_klines_5m(symbol, interval="5", limit=24):
-    session = get_session_api()
-    try:
-        response = session.get_kline(
-            category="linear",
-            symbol=symbol,
-            interval=interval,
-            limit=limit
-        )
-        df = pd.DataFrame(response['result']['list'])
-        df.columns = ['timestamp','open','high','low','close','volume','turnover']
-        df = df.iloc[::-1]
-        df['close'] = df['close'].astype(float)
-        df['volume'] = df['volume'].astype(float)
-        return df
-    except Exception as e:
-        print(f"❌ Klaida get_klines_5m({symbol}): {e}")
         return pd.DataFrame()
 
 def apply_ema(df):
@@ -132,26 +114,37 @@ def apply_ema(df):
         print(f"❌ EMA klaida: {e}")
         return df
 
-def fetch_top_symbols(limit=100):
+def apply_atr(df, window=5):
+    try:
+        atr = AverageTrueRange(df['high'], df['low'], df['close'], window=window).average_true_range()
+        df['atr'] = atr
+        return df
+    except Exception as e:
+        print(f"❌ ATR klaida: {e}")
+        return df
+
+def fetch_top_symbols(limit=15):
     session = get_session_api()
     try:
         tickers = session.get_tickers(category="linear")['result']['list']
         df = pd.DataFrame(tickers)
         df['volume24h'] = df['turnover24h'].astype(float)
-        df['priceChange'] = df['price24hPcnt'].astype(float) * 100
         df = df[df['symbol'].str.endswith("USDT")]
         df = df[df['symbol'].str.isalpha()]
         top = df.sort_values("volume24h", ascending=False).head(limit)
-        return top['symbol'].tolist(), top['symbol'].tolist()[:15]   # TOP 15
+        return top['symbol'].tolist()
     except Exception as e:
         print(f"❌ Klaida fetch_top_symbols: {e}")
-        return [], []
+        return []
 
 def open_position(symbol, qty):
     session = get_session_api()
     try:
-        lev = 5
-        session.set_leverage(category="linear", symbol=symbol, buyLeverage=lev, sellLeverage=lev)
+        lev = 5  # x5 svertas
+        try:
+            session.set_leverage(category="linear", symbol=symbol, buyLeverage=lev, sellLeverage=lev)
+        except Exception as lev_err:
+            print(f"⚠️ Sverto klaida {symbol}: {lev_err}")
         order = session.place_order(
             category="linear",
             symbol=symbol,
@@ -194,69 +187,43 @@ def get_last_prices(symbols):
         return {}
 
 def trading_loop():
-    print("🚀 Botas paleistas!")
+    print("🚀 PRO greito scalping botas paleistas!")
     opened_positions = {}
 
-    TARGET_PROFIT_PCT = 1      # Uždaryti kai +1%
-    POSITION_PCT = 40          # 40% balanso vienai pozicijai
-    symbol_in_position = None  # Tik viena pozicija
+    TARGET_PROFIT_PCT = 0.7     # +0,7 % take profit
+    STOP_LOSS_PCT = -0.7        # -0,7 % stop loss
+    POSITION_PCT = 10           # 10 % balanso per poziciją
+    symbol_in_position = None
 
     while True:
         now = datetime.datetime.utcnow()
         if symbol_in_position is None:
-            # Ieškom signalų TIK jei nėra atidarytos pozicijos
-            symbols, top15 = fetch_top_symbols(limit=100)
+            symbols = fetch_top_symbols(limit=15)
+            print(f"\n[{now.strftime('%H:%M:%S')}] Tikrinam {symbols}")
+
             for symbol in symbols:
                 min_qty, qty_step, min_notional, max_leverage = get_symbol_info(symbol)
                 if min_qty is None or qty_step is None or min_notional is None:
                     continue
-
                 df = get_klines(symbol)
-                time.sleep(1.5)
-                if df.empty:
+                time.sleep(0.8)
+                if df.empty or len(df) < 6:
                     continue
                 df = apply_ema(df)
+                df = apply_atr(df, window=5)
                 if df.empty:
                     continue
 
-                # 4 filtrai
-                # --- 1) 1h pokytis: nuo +0.5 iki +2.0 %
-                open1h = df.iloc[-2]['close']
-                price_now = df.iloc[-1]['close']
-                price_change_1h = (price_now - open1h) / open1h * 100
-                filter_1 = 0.5 <= price_change_1h <= 2.0
+                last = df.iloc[-1]
+                prev = df.iloc[-2]
+                price_now = last['close']
+                price_prev = prev['close']
+                change_1m = (price_now - price_prev) / price_prev * 100
+                above_ema = price_now > last['ema']
+                high_atr = last['atr'] > df['atr'].mean()
 
-                # --- 2) Kaina virš EMA20
-                ema20 = df.iloc[-1]['ema']
-                filter_2 = price_now > ema20
-
-                # --- 3) Ar TOP 15 pagal apyvartą
-                filter_3 = symbol in top15
-
-                # --- 4) RSI <= 70
-                rsi = RSIIndicator(df['close'], window=14).rsi().iloc[-1]
-                filter_4 = rsi <= 70
-
-                # --- 5) 5min pullback – paskutinė 5min žvakė žemiau 1h max bent 0.2%
-                df_5m = get_klines_5m(symbol, interval="5", limit=12)
-                if not df_5m.empty:
-                    max_1h = df['close'][-12:].max()
-                    last_5m = df_5m.iloc[-1]['close']
-                    pullback = (last_5m - max_1h) / max_1h * 100
-                    filter_5 = pullback <= -0.2
-                else:
-                    filter_5 = True # jei nėra 5m duomenų, nefiltruojam
-
-                # --- 6) Momentum reversal – neperka, jei per 10min nukrito >0.3%
-                change_10m = 0
-                if len(df) >= 11:
-                    min_10m = df['close'][-10:].min()
-                    change_10m = (price_now - min_10m) / min_10m * 100
-                filter_6 = change_10m > -0.3
-
-                # Reziumė:
-                if filter_1 and filter_2 and filter_3 and filter_4 and filter_5 and filter_6:
-                    print(f"{symbol}: 1h change={price_change_1h:.2f}%, EMA20={ema20:.4f}, TOP15={filter_3}, RSI={rsi:.2f}, PB={filter_5}, MOM={filter_6} | Filtrai: {filter_1} {filter_2} {filter_3} {filter_4} {filter_5} {filter_6}")
+                print(f"{symbol}: 1m change={change_1m:.2f}%, EMA20={last['ema']:.4f}, ATR5={last['atr']:.4f} | Filtrai: {change_1m>=0.4} {above_ema} {high_atr}")
+                if change_1m >= 0.4 and above_ema and high_atr:
                     qty, usdt_amount = calculate_qty(symbol, percent=POSITION_PCT)
                     if qty > 0:
                         entry_price = open_position(symbol, qty)
@@ -264,25 +231,28 @@ def trading_loop():
                             opened_positions[symbol] = (datetime.datetime.utcnow(), qty, entry_price)
                             symbol_in_position = symbol
                             break
-                else:
-                    print(f"{symbol}: 1h change={price_change_1h:.2f}%, EMA20={ema20:.4f}, TOP15={filter_3}, RSI={rsi:.2f}, PB={filter_5}, MOM={filter_6} | Filtrai: {filter_1} {filter_2} {filter_3} {filter_4} {filter_5} {filter_6}")
 
         else:
-            # Jei yra atidaryta pozicija, sekam kainą ir parduodam kai +1 %
             open_time, qty, entry_price = opened_positions[symbol_in_position]
             now = datetime.datetime.utcnow()
             last_price = get_last_prices([symbol_in_position]).get(symbol_in_position, None)
             if last_price and entry_price:
                 price_change = (last_price - entry_price) / entry_price * 100
+                profit = qty * (last_price - entry_price) * 5   # x5 svertas
+                print(f"🔄 {symbol_in_position}: {qty} vnt, Kaina {entry_price:.4f} → {last_price:.4f} | PnL: {profit:.2f} USDT ({price_change:.2f}%)")
                 if price_change >= TARGET_PROFIT_PCT:
-                    print(f"🎯 {symbol_in_position} pasiekė +{TARGET_PROFIT_PCT} %, parduodam!")
+                    print(f"🎯 {symbol_in_position} +{TARGET_PROFIT_PCT}% profit! Parduodam.")
                     close_position(symbol_in_position, qty)
                     del opened_positions[symbol_in_position]
                     symbol_in_position = None
-            # Jei nori priverstinai uždaryti po 1h, gali pridėt sąlygą čia
+                elif price_change <= STOP_LOSS_PCT:
+                    print(f"🛑 {symbol_in_position} pasiekė stop loss {STOP_LOSS_PCT}%, uždarom!")
+                    close_position(symbol_in_position, qty)
+                    del opened_positions[symbol_in_position]
+                    symbol_in_position = None
 
-        time.sleep(10)
+        time.sleep(4)
 
 if __name__ == "__main__":
-    print("🚀 Botas paleistas!")
+    print("🚀 PRO greito scalping botas paleistas!")
     trading_loop()
