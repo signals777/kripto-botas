@@ -84,7 +84,7 @@ def calculate_qty(symbol, percent=10):
         print(f"❌ Qty klaida {symbol}: {e}")
         return 0, 0
 
-def get_klines(symbol, interval="1", limit=10):
+def get_klines(symbol, interval="1", limit=50):
     session = get_session_api()
     try:
         response = session.get_kline(
