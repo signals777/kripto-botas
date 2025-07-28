@@ -6,6 +6,7 @@ import pandas as pd
 from pybit.unified_trading import HTTP
 from ta.trend import EMAIndicator
 from ta.volatility import AverageTrueRange
+from sklearn.linear_model import LogisticRegression
 
 api_key = "8BF7HTSnuLzRIhfLaI"
 api_secret = "wL68dHNUyNqLFkUaRsSFX6vBxzeAQc3uHVxG"
@@ -13,7 +14,6 @@ api_secret = "wL68dHNUyNqLFkUaRsSFX6vBxzeAQc3uHVxG"
 def get_session_api():
     return HTTP(api_key=api_key, api_secret=api_secret)
 
-# Instrumentų info cache
 instruments_info = {}
 
 def get_symbol_info(symbol):
@@ -61,7 +61,7 @@ def round_qty(qty, qty_step):
     decimals = abs(int(np.log10(qty_step)))
     return round(np.floor(qty / qty_step) * qty_step, decimals)
 
-def calculate_qty(symbol, percent=10):
+def calculate_qty(symbol, percent=20):  # 20% balanso
     session = get_session_api()
     try:
         min_qty, qty_step, min_notional, _ = get_symbol_info(symbol)
@@ -84,7 +84,7 @@ def calculate_qty(symbol, percent=10):
         print(f"❌ Qty klaida {symbol}: {e}")
         return 0, 0
 
-def get_klines(symbol, interval="1", limit=50):
+def get_klines(symbol, interval="1", limit=50):  # Peržiūri 50 žvakių!
     session = get_session_api()
     try:
         response = session.get_kline(
@@ -105,9 +105,9 @@ def get_klines(symbol, interval="1", limit=50):
         print(f"❌ Klaida get_klines({symbol}): {e}")
         return pd.DataFrame()
 
-def apply_ema(df):
+def apply_ema(df, window=20):
     try:
-        ema = EMAIndicator(df['close'], window=20).ema_indicator()
+        ema = EMAIndicator(df['close'], window=window).ema_indicator()
         df['ema'] = ema
         return df
     except Exception as e:
@@ -186,13 +186,36 @@ def get_last_prices(symbols):
         print(f"❌ Kainų gavimo klaida: {e}")
         return {}
 
-def trading_loop():
-    print("🚀 PRO greito scalping botas paleistas!")
-    opened_positions = {}
+# AI modelis (paprasta logistinė regresija)
+def train_simple_ai(df):
+    X = []
+    y = []
+    for i in range(6, len(df)-1):
+        changes = list((df['close'].iloc[i-5:i].pct_change().fillna(0).values)*100)
+        feat = changes + [df['atr'].iloc[i], df['ema'].iloc[i], df['volume'].iloc[i]]
+        X.append(feat)
+        y.append(1 if (df['close'].iloc[i+1] - df['close'].iloc[i])/df['close'].iloc[i] > 0.003 else 0)
+    if len(X) < 5:
+        return None
+    model = LogisticRegression()
+    model.fit(X, y)
+    return model
 
-    TARGET_PROFIT_PCT = 0.7     # +0,7 % take profit
-    STOP_LOSS_PCT = -0.7        # -0,7 % stop loss
-    POSITION_PCT = 60           # 60 % balanso per poziciją
+def ai_predict_next(df, model):
+    if model is None or len(df) < 7:
+        return True
+    i = len(df)-1
+    changes = list((df['close'].iloc[i-5:i].pct_change().fillna(0).values)*100)
+    feat = changes + [df['atr'].iloc[i], df['ema'].iloc[i], df['volume'].iloc[i]]
+    pred = model.predict([feat])[0]
+    return bool(pred)
+
+def trading_loop():
+    print("🚀 PRO greito scalping botas (50 žvakių, 20 % balanso) paleistas!")
+    opened_positions = {}
+    TARGET_PROFIT_PCT = 0.7
+    STOP_LOSS_PCT = -0.7
+    POSITION_PCT = 20    # 20% balanso
     symbol_in_position = None
 
     while True:
@@ -205,15 +228,17 @@ def trading_loop():
                 min_qty, qty_step, min_notional, max_leverage = get_symbol_info(symbol)
                 if min_qty is None or qty_step is None or min_notional is None:
                     continue
-                df = get_klines(symbol)
-                time.sleep(0.8)
-                if df.empty or len(df) < 6:
+                df = get_klines(symbol, interval="1", limit=50)
+                time.sleep(0.4)
+                if df.empty or len(df) < 15:
                     continue
-                df = apply_ema(df)
+                df = apply_ema(df, window=20)
                 df = apply_atr(df, window=5)
-                if df.empty:
+                if df.empty or df['ema'].isnull().any():
                     continue
 
+                # --- Breakout filtras ---
+                df['max10'] = df['high'].rolling(window=10).max()
                 last = df.iloc[-1]
                 prev = df.iloc[-2]
                 price_now = last['close']
@@ -221,9 +246,16 @@ def trading_loop():
                 change_1m = (price_now - price_prev) / price_prev * 100
                 above_ema = price_now > last['ema']
                 high_atr = last['atr'] > df['atr'].mean()
+                is_breakout = price_now > last['max10']
+                is_volume_spike = last['volume'] > 1.3 * df['volume'].mean()
 
-                print(f"{symbol}: 1m change={change_1m:.2f}%, EMA20={last['ema']:.4f}, ATR5={last['atr']:.4f} | Filtrai: {change_1m>=0.4} {above_ema} {high_atr}")
-                if change_1m >= 0.4 and above_ema and high_atr:
+                # --- AI modelis ---
+                ai_model = train_simple_ai(df)
+                ai_decision = ai_predict_next(df, ai_model)
+
+                print(f"{symbol}: 1m change={change_1m:.2f}%, EMA20={last['ema']:.4f}, ATR5={last['atr']:.4f}, breakout={is_breakout}, vol_spike={is_volume_spike}, AI={ai_decision} | Filtrai: {change_1m>=0.4} {above_ema} {high_atr} {is_breakout} {is_volume_spike} {ai_decision}")
+
+                if change_1m >= 0.4 and above_ema and high_atr and is_breakout and is_volume_spike and ai_decision:
                     qty, usdt_amount = calculate_qty(symbol, percent=POSITION_PCT)
                     if qty > 0:
                         entry_price = open_position(symbol, qty)
@@ -238,7 +270,7 @@ def trading_loop():
             last_price = get_last_prices([symbol_in_position]).get(symbol_in_position, None)
             if last_price and entry_price:
                 price_change = (last_price - entry_price) / entry_price * 100
-                profit = qty * (last_price - entry_price) * 5   # x5 svertas
+                profit = qty * (last_price - entry_price) * 5
                 print(f"🔄 {symbol_in_position}: {qty} vnt, Kaina {entry_price:.4f} → {last_price:.4f} | PnL: {profit:.2f} USDT ({price_change:.2f}%)")
                 if price_change >= TARGET_PROFIT_PCT:
                     print(f"🎯 {symbol_in_position} +{TARGET_PROFIT_PCT}% profit! Parduodam.")
@@ -251,8 +283,8 @@ def trading_loop():
                     del opened_positions[symbol_in_position]
                     symbol_in_position = None
 
-        time.sleep(4)
+        time.sleep(2)
 
 if __name__ == "__main__":
-    print("🚀 PRO greito scalping botas paleistas!")
+    print("🚀 PRO greito scalping botas (50 žvakių, 20 % balanso) paleistas!")
     trading_loop()
