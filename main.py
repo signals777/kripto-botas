@@ -231,7 +231,7 @@ def trading_loop():
                     continue
                 df = get_klines(symbol, interval="1", limit=50)
                 time.sleep(0.5)
-                if df.empty or len(df) < 15:
+                if df.empty or len(df) < 20:
                     print(f"{symbol}: Per mažai žvakių arba df tuščias ({len(df)}), skip")
                     continue
                 df = apply_ema(df, window=20)
