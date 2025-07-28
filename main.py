@@ -137,7 +137,7 @@ def fetch_top_symbols(limit=15):
         print(f"❌ Klaida fetch_top_symbols: {e}")
         return []
 
-def open_position(symbol, qty):
+def open_position(symbol, qty, side="Buy"):
     session = get_session_api()
     try:
         lev = 5  # x5 svertas
@@ -148,31 +148,31 @@ def open_position(symbol, qty):
         order = session.place_order(
             category="linear",
             symbol=symbol,
-            side="Buy",
+            side=side,
             orderType="Market",
             qty=qty,
             timeInForce="GoodTillCancel"
         )
         entry_price = float(order['result']['avgPrice']) if order.get('result', {}).get('avgPrice') else None
-        print(f"✅ BUY: {symbol} kiekis: {qty} kaina: {entry_price} svertas: x{lev}")
+        print(f"✅ {side}: {symbol} kiekis: {qty} kaina: {entry_price} svertas: x{lev}")
         return entry_price
     except Exception as e:
         print(f"❌ Orderio klaida {symbol}: {e}")
         return None
 
-def close_position(symbol, qty):
+def close_position(symbol, qty, side="Sell"):
     session = get_session_api()
     try:
         session.place_order(
             category="linear",
             symbol=symbol,
-            side="Sell",
+            side=side,
             orderType="Market",
             qty=qty,
             timeInForce="GoodTillCancel",
             reduceOnly=True
         )
-        print(f"🔻 SELL: {symbol} kiekis: {qty}")
+        print(f"🔻 {side}: {symbol} kiekis: {qty}")
     except Exception as e:
         print(f"❌ Uždarymo klaida {symbol}: {e}")
 
@@ -211,12 +211,13 @@ def ai_predict_next(df, model):
     return bool(pred)
 
 def trading_loop():
-    print("🚀 PRO greito scalping botas (50 žvakių, 20 % balanso) paleistas!")
+    print("🚀 PRO greito scalping botas (50 žvakių, 20 % balanso, LONG+SHORT) paleistas!")
     opened_positions = {}
     TARGET_PROFIT_PCT = 0.7
     STOP_LOSS_PCT = -0.7
     POSITION_PCT = 20    # 20% balanso
     symbol_in_position = None
+    position_type = None # "LONG" arba "SHORT"
 
     while True:
         now = datetime.datetime.utcnow()
@@ -239,29 +240,45 @@ def trading_loop():
 
                 # --- Breakout filtras ---
                 df['max10'] = df['high'].rolling(window=10).max()
+                df['min10'] = df['low'].rolling(window=10).min()
                 last = df.iloc[-1]
                 prev = df.iloc[-2]
                 price_now = last['close']
                 price_prev = prev['close']
                 change_1m = (price_now - price_prev) / price_prev * 100
                 above_ema = price_now > last['ema']
+                below_ema = price_now < last['ema']
                 high_atr = last['atr'] > df['atr'].mean()
-                is_breakout = price_now > last['max10']
+                is_breakout_long = price_now > last['max10']
+                is_breakout_short = price_now < last['min10']
                 is_volume_spike = last['volume'] > 1.3 * df['volume'].mean()
 
                 # --- AI modelis ---
                 ai_model = train_simple_ai(df)
                 ai_decision = ai_predict_next(df, ai_model)
 
-                print(f"{symbol}: 1m change={change_1m:.2f}%, EMA20={last['ema']:.4f}, ATR5={last['atr']:.4f}, breakout={is_breakout}, vol_spike={is_volume_spike}, AI={ai_decision} | Filtrai: {change_1m>=0.4} {above_ema} {high_atr} {is_breakout} {is_volume_spike} {ai_decision}")
+                print(f"{symbol}: 1m change={change_1m:.2f}%, EMA20={last['ema']:.4f}, ATR5={last['atr']:.4f}, breakoutL={is_breakout_long}, breakoutS={is_breakout_short}, vol_spike={is_volume_spike}, AI={ai_decision} | LONG: {change_1m>=0.4} {above_ema} {high_atr} {is_breakout_long} {is_volume_spike} {ai_decision} | SHORT: {change_1m<=-0.4} {below_ema} {high_atr} {is_breakout_short} {is_volume_spike} {ai_decision}")
 
-                if change_1m >= 0.4 and above_ema and high_atr and is_breakout and is_volume_spike and ai_decision:
+                # LONG signalas
+                if change_1m >= 0.4 and above_ema and high_atr and is_breakout_long and is_volume_spike and ai_decision:
                     qty, usdt_amount = calculate_qty(symbol, percent=POSITION_PCT)
                     if qty > 0:
-                        entry_price = open_position(symbol, qty)
+                        entry_price = open_position(symbol, qty, side="Buy")
                         if entry_price:
                             opened_positions[symbol] = (datetime.datetime.utcnow(), qty, entry_price)
                             symbol_in_position = symbol
+                            position_type = "LONG"
+                            break
+
+                # SHORT signalas
+                if change_1m <= -0.4 and below_ema and high_atr and is_breakout_short and is_volume_spike and ai_decision:
+                    qty, usdt_amount = calculate_qty(symbol, percent=POSITION_PCT)
+                    if qty > 0:
+                        entry_price = open_position(symbol, qty, side="Sell")
+                        if entry_price:
+                            opened_positions[symbol] = (datetime.datetime.utcnow(), qty, entry_price)
+                            symbol_in_position = symbol
+                            position_type = "SHORT"
                             break
 
         else:
@@ -269,22 +286,29 @@ def trading_loop():
             now = datetime.datetime.utcnow()
             last_price = get_last_prices([symbol_in_position]).get(symbol_in_position, None)
             if last_price and entry_price:
-                price_change = (last_price - entry_price) / entry_price * 100
-                profit = qty * (last_price - entry_price) * 5
-                print(f"🔄 {symbol_in_position}: {qty} vnt, Kaina {entry_price:.4f} → {last_price:.4f} | PnL: {profit:.2f} USDT ({price_change:.2f}%)")
+                if position_type == "LONG":
+                    price_change = (last_price - entry_price) / entry_price * 100
+                    profit = qty * (last_price - entry_price) * 5
+                else: # SHORT
+                    price_change = (entry_price - last_price) / entry_price * 100
+                    profit = qty * (entry_price - last_price) * 5
+                print(f"🔄 {symbol_in_position} [{position_type}]: {qty} vnt, Kaina {entry_price:.4f} → {last_price:.4f} | PnL: {profit:.2f} USDT ({price_change:.2f}%)")
+
                 if price_change >= TARGET_PROFIT_PCT:
-                    print(f"🎯 {symbol_in_position} +{TARGET_PROFIT_PCT}% profit! Parduodam.")
-                    close_position(symbol_in_position, qty)
+                    print(f"🎯 {symbol_in_position} [{position_type}] +{TARGET_PROFIT_PCT}% profit! Uždarymas.")
+                    close_position(symbol_in_position, qty, side="Sell" if position_type=="LONG" else "Buy")
                     del opened_positions[symbol_in_position]
                     symbol_in_position = None
+                    position_type = None
                 elif price_change <= STOP_LOSS_PCT:
-                    print(f"🛑 {symbol_in_position} pasiekė stop loss {STOP_LOSS_PCT}%, uždarom!")
-                    close_position(symbol_in_position, qty)
+                    print(f"🛑 {symbol_in_position} [{position_type}] stop loss {STOP_LOSS_PCT}%, uždarom!")
+                    close_position(symbol_in_position, qty, side="Sell" if position_type=="LONG" else "Buy")
                     del opened_positions[symbol_in_position]
                     symbol_in_position = None
+                    position_type = None
 
         time.sleep(2)
 
 if __name__ == "__main__":
-    print("🚀 PRO greito scalping botas (50 žvakių, 20 % balanso) paleistas!")
+    print("🚀 PRO greito scalping botas (50 žvakių, 20 % balanso, LONG+SHORT) paleistas!")
     trading_loop()
