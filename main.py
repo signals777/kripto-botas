@@ -237,11 +237,11 @@ def trading_loop():
                 print(f"{symbol}: Gauta žvakių: {len(df)}")
 
                 # 2. Jei žvakių per mažai
-                if df.empty or len(df) < 20:
+                if df.empty or len(df) < 15:
                     print(f"{symbol}: Per mažai žvakių EMA skaičiavimui ({len(df)}/20), skip")
                     continue 
 
-                df = apply_ema(df, window=20)
+                df = apply_ema(df, window=15)
 
                 # 3. Rodo kiek EMA yra NaN (t.y. tuščios)
                 print(f"{symbol}: Po EMA skaičiavimo – žvakių: {len(df)}, null EMA: {df['ema'].isnull().sum()} (iš {len(df)})")
