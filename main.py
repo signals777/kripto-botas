@@ -8,8 +8,8 @@ from ta.trend import EMAIndicator
 from ta.volatility import AverageTrueRange
 from sklearn.linear_model import LogisticRegression
 
-api_key = "8BF7HTSnuLzRIhfLaI"
-api_secret = "wL68dHNUyNqLFkUaRsSFX6vBxzeAQc3uHVxG"
+api_key = "6jW8juUDFLe1ykvL3L"
+api_secret = "3UH1avHKHWWyMCmU26RMxh784TGSA8lurzST"
 
 def get_session_api():
     return HTTP(api_key=api_key, api_secret=api_secret)
