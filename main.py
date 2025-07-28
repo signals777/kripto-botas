@@ -229,12 +229,23 @@ def trading_loop():
                 if min_qty is None or qty_step is None or min_notional is None:
                     print(f"{symbol}: nėra min dydžio info (skip)")
                     continue
+
                 df = get_klines(symbol, interval="1", limit=50)
                 time.sleep(0.5)
+
+                # 1. Rodo kiek žvakių
+                print(f"{symbol}: Gauta žvakių: {len(df)}")
+
+                # 2. Jei žvakių per mažai
                 if df.empty or len(df) < 20:
                     print(f"{symbol}: Per mažai žvakių EMA skaičiavimui ({len(df)}/20), skip")
                     continue 
+
                 df = apply_ema(df, window=20)
+
+                # 3. Rodo kiek EMA yra NaN (t.y. tuščios)
+                print(f"{symbol}: Po EMA skaičiavimo – žvakių: {len(df)}, null EMA: {df['ema'].isnull().sum()} (iš {len(df)})")
+
                 df = apply_atr(df, window=5)
                 if df.empty or df['ema'].isnull().any():
                     print(f"{symbol}: nėra EMA (skip)")
