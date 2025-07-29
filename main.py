@@ -106,7 +106,7 @@ def get_klines(symbol, interval="1", limit=50):
         print(f"❌ Klaida get_klines({symbol}): {e}")
         return pd.DataFrame()
 
-def apply_ema(df, window=15):  # EMA 15!
+def apply_ema(df, window=15):
     try:
         ema = EMAIndicator(df['close'], window=window).ema_indicator()
         df['ema'] = ema
@@ -193,8 +193,8 @@ def train_simple_ai(df):
     for i in range(6, len(df)-1):
         changes = list((df['close'].iloc[i-5:i].pct_change().fillna(0).values)*100)
         feat = changes + [df['atr'].iloc[i], df['ema'].iloc[i], df['volume'].iloc[i]]
-        y.append(1 if (df['close'].iloc[i+1] - df['close'].iloc[i])/df['close'].iloc[i] < -0.003 else 0)  # short signal
         X.append(feat)
+        y.append(1 if (df['close'].iloc[i+1] - df['close'].iloc[i])/df['close'].iloc[i] < -0.003 else 0)  # short signal
     if len(X) < 5:
         return None
     model = LogisticRegression()
@@ -211,11 +211,11 @@ def ai_predict_next(df, model):
     return bool(pred)
 
 def trading_loop():
-    print("🚀 PRO greito scalping SHORT botas (EMA15, 50 žvakių, 20 % balanso, 1 pozicija) paleistas!")
+    print("🚀 PRO greito scalping SHORT botas (50 žvakių, EMA15, 20 % balanso, 1 pozicija) paleistas!")
     opened_positions = {}
     TARGET_PROFIT_PCT = 0.7
     STOP_LOSS_PCT = -0.7
-    POSITION_PCT = 20
+    POSITION_PCT = 20    # 20% balanso
     symbol_in_position = None
 
     while True:
@@ -232,38 +232,32 @@ def trading_loop():
 
                 df = get_klines(symbol, interval="1", limit=50)
                 time.sleep(0.5)
-
-                # 1. Rodo kiek žvakių
                 print(f"{symbol}: Gauta žvakių: {len(df)}")
 
-                # 2. Jei žvakių per mažai
                 if df.empty or len(df) < 15:
                     print(f"{symbol}: Per mažai žvakių EMA skaičiavimui ({len(df)}/15), skip")
                     continue 
 
                 df = apply_ema(df, window=15)
+                print(f"{symbol}: Po EMA skaičiavimo – žvakių: {len(df)}, null EMA: {df['ema'].isnull().sum()} (iš {len(df)})")
 
-                # 3. Rodo ar paskutinė žvakė turi EMA
-                if pd.isnull(df['ema'].iloc[-1]):
-                    print(f"{symbol}: paskutinė žvakė neturi EMA (skip)")
+                # Imama paskutinė žvakė, kur YRA EMA (ne būtinai paskutinė visos sekos!)
+                valid = df[df['ema'].notnull()]
+                if valid.empty:
+                    print(f"{symbol}: nėra nė vienos žvakės su EMA (skip)")
                     continue
-                else:
-                    print(f"{symbol}: paskutinės žvakės EMA = {df['ema'].iloc[-1]:.4f}")
+                last = valid.iloc[-1]
+                prev = valid.iloc[-2] if len(valid) > 1 else None
+                if prev is None:
+                    print(f"{symbol}: nėra pakankamai žvakių su EMA (skip)")
+                    continue
 
                 df = apply_atr(df, window=5)
-                if df.empty:
-                    print(f"{symbol}: ATR skaičiavimas nepavyko (skip)")
-                    continue
-
+                below_ema = last['close'] < last['ema']
                 df['min10'] = df['low'].rolling(window=10).min()
-                last = df.iloc[-1]
-                prev = df.iloc[-2]
-                price_now = last['close']
-                price_prev = prev['close']
-                change_1m = (price_now - price_prev) / price_prev * 100
-                below_ema = price_now < last['ema']
+                change_1m = (last['close'] - prev['close']) / prev['close'] * 100
                 high_atr = last['atr'] > df['atr'].mean()
-                is_breakout_short = price_now < last['min10']
+                is_breakout_short = last['close'] < last['min10']
                 is_volume_spike = last['volume'] > 1.3 * df['volume'].mean()
                 ai_model = train_simple_ai(df)
                 ai_decision = ai_predict_next(df, ai_model)
@@ -304,5 +298,5 @@ def trading_loop():
         time.sleep(2)
 
 if __name__ == "__main__":
-    print("🚀 PRO greito scalping SHORT botas (EMA15, 50 žvakių, 20 % balanso, 1 pozicija) paleistas!")
+    print("🚀 PRO greito scalping SHORT botas (50 žvakių, EMA15, 20 % balanso, 1 pozicija) paleistas!")
     trading_loop()
