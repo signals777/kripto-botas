@@ -211,7 +211,7 @@ def ai_predict_next(df, model):
     return bool(pred)
 
 def trading_loop():
-    print("🚀 PRO greito scalping SHORT botas (50 žvakių, EMA15, 20 % balanso, 1 pozicija) paleistas!")
+    print("🚀 PRO greito scalping SHORT botas (150 žvakių, EMA15, 20 % balanso, 1 pozicija) paleistas!")
     opened_positions = {}
     TARGET_PROFIT_PCT = 0.7
     STOP_LOSS_PCT = -0.7
@@ -230,7 +230,7 @@ def trading_loop():
                     print(f"{symbol}: nėra min dydžio info (skip)")
                     continue
 
-                df = get_klines(symbol, interval="1", limit=50)
+                df = get_klines(symbol, interval="1", limit=150)
                 time.sleep(0.5)
 
                 # 1. Rodo kiek žvakių
