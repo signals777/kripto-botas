@@ -85,7 +85,7 @@ def calculate_qty(symbol, percent=20):
         print(f"❌ Qty klaida {symbol}: {e}")
         return 0, 0
 
-def get_klines(symbol, interval="1", limit=70):
+def get_klines(symbol, interval="1", limit=50):
     session = get_session_api()
     try:
         response = session.get_kline(
@@ -232,32 +232,39 @@ def trading_loop():
 
                 df = get_klines(symbol, interval="1", limit=50)
                 time.sleep(0.5)
+
+                # 1. Rodo kiek žvakių
                 print(f"{symbol}: Gauta žvakių: {len(df)}")
 
+                # 2. Jei žvakių per mažai
                 if df.empty or len(df) < 15:
-                    print(f"{symbol}: Per mažai žvakių EMA skaičiavimui ({len(df)}/15), skip")
+                    print(f"{symbol}: Per mažai žvakių EMA/ATR skaičiavimui ({len(df)}/15), skip")
                     continue 
 
                 df = apply_ema(df, window=15)
+                # 3. Rodo kiek EMA yra NaN (t.y. tuščios)
                 print(f"{symbol}: Po EMA skaičiavimo – žvakių: {len(df)}, null EMA: {df['ema'].isnull().sum()} (iš {len(df)})")
 
-                # Imama paskutinė žvakė, kur YRA EMA (ne būtinai paskutinė visos sekos!)
-                valid = df[df['ema'].notnull()]
-                if valid.empty:
-                    print(f"{symbol}: nėra nė vienos žvakės su EMA (skip)")
-                    continue
-                last = valid.iloc[-1]
-                prev = valid.iloc[-2] if len(valid) > 1 else None
-                if prev is None:
-                    print(f"{symbol}: nėra pakankamai žvakių su EMA (skip)")
+                df = apply_atr(df, window=5)
+                # 4. Patikrina ar ATR paskaičiuota
+                if 'atr' not in df.columns or df['atr'].isnull().all():
+                    print(f"{symbol}: nėra ATR (skip)")
                     continue
 
-                df = apply_atr(df, window=5)
-                below_ema = last['close'] < last['ema']
+                # 5. Patikrina ar EMA paskaičiuota
+                if 'ema' not in df.columns or df['ema'].isnull().any():
+                    print(f"{symbol}: nėra EMA (skip)")
+                    continue
+
                 df['min10'] = df['low'].rolling(window=10).min()
-                change_1m = (last['close'] - prev['close']) / prev['close'] * 100
+                last = df.iloc[-1]
+                prev = df.iloc[-2]
+                price_now = last['close']
+                price_prev = prev['close']
+                change_1m = (price_now - price_prev) / price_prev * 100
+                below_ema = price_now < last['ema']
                 high_atr = last['atr'] > df['atr'].mean()
-                is_breakout_short = last['close'] < last['min10']
+                is_breakout_short = price_now < last['min10']
                 is_volume_spike = last['volume'] > 1.3 * df['volume'].mean()
                 ai_model = train_simple_ai(df)
                 ai_decision = ai_predict_next(df, ai_model)
