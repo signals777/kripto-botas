@@ -38,7 +38,11 @@ def get_balance():
     try:
         wallets = session.get_wallet_balance(accountType="UNIFIED")["result"]["list"][0]["coin"]
         usdt = next((c for c in wallets if c["coin"] == "USDT"), None)
-        return float(usdt["availableToTrade"]) if usdt else 0
+        # Tikrina kelis galimus laukus, kuriuos grąžina Bybit
+        for key in ["availableToTrade", "availableBalance", "walletBalance", "equity"]:
+            if usdt and key in usdt and usdt[key] is not None:
+                return float(usdt[key])
+        return 0.0
     except Exception as e:
         print(f"❌ Balanso klaida: {e}")
         return 0
@@ -74,7 +78,7 @@ def calculate_qty(symbol, percent=20):
         print(f"❌ Qty klaida {symbol}: {e}")
         return 0, 0
 
-def get_klines(symbol, interval="1", limit=150):
+def get_klines(symbol, interval="1", limit=50):
     session = get_session_api()
     try:
         response = session.get_kline(category="linear", symbol=symbol, interval=interval, limit=limit)
@@ -136,7 +140,9 @@ def train_ai(df):
         label = int((df['close'].iloc[i+1] - df['close'].iloc[i]) / df['close'].iloc[i] < -0.004)
         X.append(feat)
         y.append(label)
-    if len(X) < 10: return None
+    if len(set(y)) < 2:  # turi būti bent dvi klasės
+        print("⚠️ AI mokymo duomenyse per mažai įvairovės (viena klasė), skip.")
+        return None
     model = LogisticRegression()
     model.fit(X, y)
     return model
@@ -146,7 +152,7 @@ def ai_decision(df, model):
         changes = list((df['close'].iloc[-6:-1].pct_change().fillna(0))*100)
         vol = df['volume'].iloc[-1]
         feat = changes + [vol]
-        return bool(model.predict([feat])[0])
+        return bool(model.predict([feat])[0]) if model else True
     except:
         return True
 
@@ -178,7 +184,7 @@ def trading_loop():
             for sym in symbols:
                 df = get_klines(sym)
                 if df.empty or len(df) < 15:
-                    print(f"⚠️ {sym}: per mažai žvakių.")
+                    print(f"⚠️ {sym}: per mažai žvakių ({len(df)})")
                     continue
                 df['min10'] = df['low'].rolling(window=10).min()
                 last = df.iloc[-1]
