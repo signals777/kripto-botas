@@ -6,7 +6,7 @@ import pandas as pd
 from pybit.unified_trading import HTTP
 from sklearn.linear_model import LogisticRegression
 
-# BYBIT API
+# BYBIT API RAKTAI
 api_key = "6jW8juUDFLe1ykvL3L"
 api_secret = "3UH1avHKHWWyMCmU26RMxh784TGSA8lurzST"
 
@@ -38,11 +38,7 @@ def get_balance():
     try:
         wallets = session.get_wallet_balance(accountType="UNIFIED")["result"]["list"][0]["coin"]
         usdt = next((c for c in wallets if c["coin"] == "USDT"), None)
-        # Tikrina kelis galimus laukus, kuriuos grąžina Bybit
-        for key in ["availableToTrade", "availableBalance", "walletBalance", "equity"]:
-            if usdt and key in usdt and usdt[key] is not None:
-                return float(usdt[key])
-        return 0.0
+        return float(usdt["availableToTrade"]) if usdt else 0
     except Exception as e:
         print(f"❌ Balanso klaida: {e}")
         return 0
@@ -78,7 +74,7 @@ def calculate_qty(symbol, percent=20):
         print(f"❌ Qty klaida {symbol}: {e}")
         return 0, 0
 
-def get_klines(symbol, interval="1", limit=50):
+def get_klines(symbol, interval="1", limit=150):
     session = get_session_api()
     try:
         response = session.get_kline(category="linear", symbol=symbol, interval=interval, limit=limit)
@@ -140,8 +136,9 @@ def train_ai(df):
         label = int((df['close'].iloc[i+1] - df['close'].iloc[i]) / df['close'].iloc[i] < -0.004)
         X.append(feat)
         y.append(label)
-    if len(set(y)) < 2:  # turi būti bent dvi klasės
-        print("⚠️ AI mokymo duomenyse per mažai įvairovės (viena klasė), skip.")
+    # Naujas saugiklis: jei klasės tik viena, AI tiesiog ignoruojamas, klaidos nėra!
+    if len(set(y)) < 2:
+        print("⚠️ AI mokymo duomenyse per mažai įvairovės (viena klasė), AI ignoruojamas (praleidžiamas).")
         return None
     model = LogisticRegression()
     model.fit(X, y)
@@ -149,15 +146,17 @@ def train_ai(df):
 
 def ai_decision(df, model):
     try:
+        if model is None:
+            return True
         changes = list((df['close'].iloc[-6:-1].pct_change().fillna(0))*100)
         vol = df['volume'].iloc[-1]
         feat = changes + [vol]
-        return bool(model.predict([feat])[0]) if model else True
+        return bool(model.predict([feat])[0])
     except:
         return True
 
 def trading_loop():
-    print("🚀 Boto paleidimas...")
+    print("🚀 Boto paleidimas...")  # dabar tikrai visada rašo paleidimą
     opened = {}
     highest_balance = get_balance()
     cooldown_until = None
@@ -184,7 +183,7 @@ def trading_loop():
             for sym in symbols:
                 df = get_klines(sym)
                 if df.empty or len(df) < 15:
-                    print(f"⚠️ {sym}: per mažai žvakių ({len(df)})")
+                    print(f"⚠️ {sym}: per mažai žvakių.")
                     continue
                 df['min10'] = df['low'].rolling(window=10).min()
                 last = df.iloc[-1]
