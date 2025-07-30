@@ -8,7 +8,6 @@ from ta.trend import EMAIndicator
 from ta.volatility import AverageTrueRange
 from sklearn.linear_model import LogisticRegression
 
-# >>> ĮRAŠYK SAVO BYBIT API RAKTUS <<<
 api_key = "6jW8juUDFLe1ykvL3L"
 api_secret = "3UH1avHKHWWyMCmU26RMxh784TGSA8lurzST"
 
@@ -141,7 +140,7 @@ def fetch_top_symbols(limit=15):
 def open_position(symbol, qty):
     session = get_session_api()
     try:
-        lev = 5  # x5 svertas
+        lev = 5
         try:
             session.set_leverage(category="linear", symbol=symbol, buyLeverage=lev, sellLeverage=lev)
         except Exception as lev_err:
@@ -149,7 +148,7 @@ def open_position(symbol, qty):
         order = session.place_order(
             category="linear",
             symbol=symbol,
-            side="Sell",  # SHORT atidarymas
+            side="Sell",
             orderType="Market",
             qty=qty,
             timeInForce="GoodTillCancel"
@@ -167,7 +166,7 @@ def close_position(symbol, qty):
         session.place_order(
             category="linear",
             symbol=symbol,
-            side="Buy",  # SHORT uždarymas
+            side="Buy",
             orderType="Market",
             qty=qty,
             timeInForce="GoodTillCancel",
@@ -194,7 +193,7 @@ def train_simple_ai(df):
         changes = list((df['close'].iloc[i-5:i].pct_change().fillna(0).values)*100)
         feat = changes + [df['atr'].iloc[i], df['ema'].iloc[i], df['volume'].iloc[i]]
         X.append(feat)
-        y.append(1 if (df['close'].iloc[i+1] - df['close'].iloc[i])/df['close'].iloc[i] < -0.003 else 0)  # short signal
+        y.append(1 if (df['close'].iloc[i+1] - df['close'].iloc[i])/df['close'].iloc[i] < -0.003 else 0)
     if len(X) < 5:
         return None
     model = LogisticRegression()
@@ -215,7 +214,7 @@ def trading_loop():
     opened_positions = {}
     TARGET_PROFIT_PCT = 0.7
     STOP_LOSS_PCT = -0.7
-    POSITION_PCT = 20    # 20% balanso
+    POSITION_PCT = 20
     symbol_in_position = None
 
     while True:
@@ -232,28 +231,16 @@ def trading_loop():
 
                 df = get_klines(symbol, interval="1", limit=150)
                 time.sleep(0.5)
-
-                # 1. Rodo kiek žvakių
                 print(f"{symbol}: Gauta žvakių: {len(df)}")
-
-                # 2. Jei žvakių per mažai
                 if df.empty or len(df) < 15:
                     print(f"{symbol}: Per mažai žvakių EMA/ATR skaičiavimui ({len(df)}/15), skip")
-                    continue 
-
-                df = apply_ema(df, window=15)
-                # 3. Rodo kiek EMA yra NaN (t.y. tuščios)
-                print(f"{symbol}: Po EMA skaičiavimo – žvakių: {len(df)}, null EMA: {df['ema'].isnull().sum()} (iš {len(df)})")
-
-                df = apply_atr(df, window=5)
-                # 4. Patikrina ar ATR paskaičiuota
-                if 'atr' not in df.columns or df['atr'].isnull().all():
-                    print(f"{symbol}: nėra ATR (skip)")
                     continue
 
-                # 5. Patikrina ar EMA paskaičiuota
-                if 'ema' not in df.columns or df['ema'].isnull().any():
-                    print(f"{symbol}: nėra EMA (skip)")
+                df = apply_ema(df, window=15)
+                print(f"{symbol}: Po EMA skaičiavimo – žvakių: {len(df)}, null EMA: {df['ema'].isnull().sum()} (iš {len(df)})")
+                df = apply_atr(df, window=5)
+                if 'atr' not in df.columns or df['atr'].isnull().all():
+                    print(f"{symbol}: nėra ATR (skip)")
                     continue
 
                 df['min10'] = df['low'].rolling(window=10).min()
@@ -262,14 +249,20 @@ def trading_loop():
                 price_now = last['close']
                 price_prev = prev['close']
                 change_1m = (price_now - price_prev) / price_prev * 100
-                below_ema = price_now < last['ema']
+
+                if 'ema' in df.columns and not pd.isna(df['ema'].iloc[-1]):
+                    below_ema = price_now < last['ema']
+                else:
+                    below_ema = True
+                    print(f"{symbol}: EMA nėra arba NaN – tęsiam be EMA filtro")
+
                 high_atr = last['atr'] > df['atr'].mean()
                 is_breakout_short = price_now < last['min10']
                 is_volume_spike = last['volume'] > 1.3 * df['volume'].mean()
                 ai_model = train_simple_ai(df)
                 ai_decision = ai_predict_next(df, ai_model)
 
-                print(f"{symbol}: 1m change={change_1m:.2f}%, EMA15={last['ema']:.4f}, ATR5={last['atr']:.4f}, breakoutS={is_breakout_short}, vol_spike={is_volume_spike}, AI={ai_decision} | SHORT: {change_1m<=-0.4} {below_ema} {high_atr} {is_breakout_short} {is_volume_spike} {ai_decision}")
+                print(f"{symbol}: 1m change={change_1m:.2f}%, EMA15={last.get('ema', 0):.4f}, ATR5={last['atr']:.4f}, breakoutS={is_breakout_short}, vol_spike={is_volume_spike}, AI={ai_decision} | SHORT: {change_1m<=-0.4} {below_ema} {high_atr} {is_breakout_short} {is_volume_spike} {ai_decision}")
 
                 if change_1m <= -0.4 and below_ema and high_atr and is_breakout_short and is_volume_spike and ai_decision:
                     qty, usdt_amount = calculate_qty(symbol, percent=POSITION_PCT)
@@ -305,5 +298,5 @@ def trading_loop():
         time.sleep(2)
 
 if __name__ == "__main__":
-    print("🚀 PRO greito scalping SHORT botas (50 žvakių, EMA15, 20 % balanso, 1 pozicija) paleistas!")
+    print("🚀 PRO greito scalping SHORT botas (150 žvakių, EMA15, 20 % balanso, 1 pozicija) paleistas!")
     trading_loop()
