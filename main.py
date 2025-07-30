@@ -1,14 +1,25 @@
+# -*- coding: utf-8 -*-
 import os
 import time
 import datetime
 import numpy as np
 import pandas as pd
+import csv
 from pybit.unified_trading import HTTP
 from sklearn.linear_model import LogisticRegression
 
 # BYBIT API RAKTAI
 api_key = "6jW8juUDFLe1ykvL3L"
 api_secret = "3UH1avHKHWWyMCmU26RMxh784TGSA8lurzST"
+
+# STRATEGIJOS PARAMETRAI
+MAX_OPEN_POSITIONS = 3
+TRIGGER_PNL = 0.02  # +2% pelno
+TRAILING_DISTANCE = 0.015  # -1.5% nuo piko
+TP_TARGET = 0.03  # +3%
+SL_DEFAULT = 0.01  # -1%
+LEVERAGE = 5
+RISK_PERCENT = 1  # 1% balanso
 
 def get_session_api():
     return HTTP(api_key=api_key, api_secret=api_secret)
@@ -57,24 +68,7 @@ def round_qty(qty, qty_step):
         return qty
     return round(np.floor(qty / qty_step) * qty_step, int(abs(np.log10(qty_step))))
 
-def calculate_qty(symbol, percent=20):
-    session = get_session_api()
-    try:
-        min_qty, qty_step, min_notional = get_symbol_info(symbol)
-        balance = get_balance()
-        usdt_amount = balance * percent / 100
-        price = next((float(t['lastPrice']) for t in session.get_tickers(category="linear")["result"]["list"] if t["symbol"] == symbol), None)
-        if not price: return 0, 0
-        qty = round_qty(usdt_amount / price, qty_step)
-        if qty < min_qty or qty * price < min_notional:
-            print(f"⚠️ Netinkama suma {symbol}: qty={qty}, notional={qty*price:.2f}")
-            return 0, 0
-        return qty, usdt_amount
-    except Exception as e:
-        print(f"❌ Qty klaida {symbol}: {e}")
-        return 0, 0
-
-def get_klines(symbol, interval="1", limit=150):
+def get_klines(symbol, interval="240", limit=150):
     session = get_session_api()
     try:
         response = session.get_kline(category="linear", symbol=symbol, interval=interval, limit=limit)
@@ -89,7 +83,7 @@ def get_klines(symbol, interval="1", limit=150):
         print(f"❌ Klines klaida {symbol}: {e}")
         return pd.DataFrame()
 
-def fetch_top_symbols(limit=15):
+def fetch_top_symbols(limit=30):
     session = get_session_api()
     try:
         data = session.get_tickers(category="linear")["result"]["list"]
@@ -105,7 +99,7 @@ def fetch_top_symbols(limit=15):
 def open_position(symbol, qty):
     session = get_session_api()
     try:
-        session.set_leverage(category="linear", symbol=symbol, buyLeverage=5, sellLeverage=5)
+        session.set_leverage(category="linear", symbol=symbol, buyLeverage=LEVERAGE, sellLeverage=LEVERAGE)
         order = session.place_order(
             category="linear", symbol=symbol, side="Sell", orderType="Market",
             qty=qty, timeInForce="GoodTillCancel")
@@ -127,6 +121,36 @@ def close_position(symbol, qty):
     except Exception as e:
         print(f"❌ Uždarymo klaida {symbol}: {e}")
 
+def log_trade(symbol, direction, qty, entry_price, exit_price, pnl, reason):
+    filename = "trade_log.csv"
+    file_exists = os.path.isfile(filename)
+    now = datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+    with open(filename, mode='a', newline='') as file:
+        writer = csv.writer(file)
+        if not file_exists:
+            writer.writerow(["Time", "Symbol", "Direction", "Qty", "Entry", "Exit", "PnL (%)", "Reason"])
+        writer.writerow([now, symbol, direction, qty, entry_price, exit_price, f"{pnl*100:.2f}", reason])
+
+def calculate_qty_with_risk(symbol, entry_price, stop_price, risk_percent=1, leverage=5):
+    balance = get_balance()
+    if balance <= 0:
+        print("⚠️ Balansas lygus nuliui")
+        return 0, 0
+    risk_usdt = balance * (risk_percent / 100)
+    sl_distance = abs(entry_price - stop_price)
+    if sl_distance == 0:
+        print("⚠️ SL atstumas 0")
+        return 0, 0
+    position_usdt = risk_usdt / (sl_distance / entry_price)
+    max_position = balance * leverage
+    position_usdt = min(position_usdt, max_position)
+    min_qty, qty_step, _ = get_symbol_info(symbol)
+    qty = round_qty(position_usdt / entry_price, qty_step)
+    if qty < min_qty:
+        print(f"⚠️ {symbol}: qty {qty} mažesnis nei min {min_qty}")
+        return 0, 0
+    return qty, position_usdt
+
 def train_ai(df):
     X, y = [], []
     for i in range(6, len(df)-1):
@@ -136,9 +160,8 @@ def train_ai(df):
         label = int((df['close'].iloc[i+1] - df['close'].iloc[i]) / df['close'].iloc[i] < -0.004)
         X.append(feat)
         y.append(label)
-    # Naujas saugiklis: jei klasės tik viena, AI tiesiog ignoruojamas, klaidos nėra!
     if len(set(y)) < 2:
-        print("⚠️ AI mokymo duomenyse per mažai įvairovės (viena klasė), AI ignoruojamas (praleidžiamas).")
+        print("⚠️ AI mokymo duomenyse per mažai įvairovės (viena klasė), AI ignoruojamas.")
         return None
     model = LogisticRegression()
     model.fit(X, y)
@@ -151,71 +174,89 @@ def ai_decision(df, model):
         changes = list((df['close'].iloc[-6:-1].pct_change().fillna(0))*100)
         vol = df['volume'].iloc[-1]
         feat = changes + [vol]
-        return bool(model.predict([feat])[0])
+        proba = model.predict_proba([feat])[0][1]
+        return proba > 0.8
     except:
         return True
 
-def trading_loop():
-    print("🚀 Boto paleidimas...")  # dabar tikrai visada rašo paleidimą
+def trading_loop_cycle():
+    print("🚀 Profesionalus breakout+AI+trailing botas paleistas")
     opened = {}
-    highest_balance = get_balance()
-    cooldown_until = None
 
     while True:
-        now = datetime.datetime.utcnow()
+        try:
+            now = datetime.datetime.utcnow()
 
-        if cooldown_until and now < cooldown_until:
-            print(f"🕒 Botas sustabdytas dėl balanso kritimo iki {cooldown_until.strftime('%H:%M:%S')}")
-            time.sleep(10)
-            continue
-
-        balance = get_balance()
-        if balance > highest_balance:
-            highest_balance = balance
-        elif balance < highest_balance * 0.995:
-            print(f"⚠️ Balansas krito daugiau nei -0.5%. Botas stabdomas 5 min.")
-            cooldown_until = now + datetime.timedelta(minutes=5)
-            continue
-
-        if not opened:
-            symbols = fetch_top_symbols()
-            print(f"\n[{now.strftime('%H:%M:%S')}] Tikrinamos poros: {symbols}")
-            for sym in symbols:
-                df = get_klines(sym)
-                if df.empty or len(df) < 15:
-                    print(f"⚠️ {sym}: per mažai žvakių.")
+            # Patikrinam aktyvias pozicijas
+            for symbol in list(opened):
+                data = opened[symbol]
+                price = get_last_prices([symbol]).get(symbol)
+                if not price:
                     continue
-                df['min10'] = df['low'].rolling(window=10).min()
-                last = df.iloc[-1]
-                prev = df.iloc[-2]
-                drop = (last['close'] - prev['close']) / prev['close'] * 100
-                breakout = last['close'] < last['min10']
-                volume_spike = last['volume'] > df['volume'].mean() * 1.5
-                model = train_ai(df)
-                ai = ai_decision(df, model)
-                print(f"{sym}: kritimas={drop:.2f}%, breakout={breakout}, vol_spike={volume_spike}, AI={ai}")
+                entry = data['entry_price']
+                qty = data['qty']
+                peak = data['peak_price']
+                pnl = (entry - price) / entry
+                peak = min(price, peak)
+                opened[symbol]['peak_price'] = peak
+                if pnl >= TRIGGER_PNL and price >= peak * (1 + TRAILING_DISTANCE):
+                    print(f"🔻 {symbol} Trailing SL hit. PnL: {pnl:.2%}")
+                    close_position(symbol, qty)
+                    log_trade(symbol, "short", qty, entry, price, pnl, "Trailing SL")
+                    del opened[symbol]
+                    continue
+                if price <= entry * (1 - TP_TARGET):
+                    print(f"🎯 {symbol} TP hit! PnL: {pnl:.2%}")
+                    close_position(symbol, qty)
+                    log_trade(symbol, "short", qty, entry, price, pnl, "TP")
+                    del opened[symbol]
+                    continue
+                if price >= entry * (1 + SL_DEFAULT):
+                    print(f"🛑 {symbol} SL hit! PnL: {pnl:.2%}")
+                    close_position(symbol, qty)
+                    log_trade(symbol, "short", qty, entry, price, pnl, "SL")
+                    del opened[symbol]
+                    continue
 
-                if drop <= -0.4 and breakout and volume_spike and ai:
-                    qty, _ = calculate_qty(sym)
-                    if qty > 0:
-                        entry = open_position(sym, qty)
-                        if entry:
-                            opened[sym] = (datetime.datetime.utcnow(), qty, entry)
-                            break
-                    else:
-                        print(f"⚠️ {sym}: Kiekis netinkamas.")
-        else:
-            for sym in list(opened):
-                entry_time, qty, entry_price = opened[sym]
-                price = get_last_prices([sym]).get(sym, None)
-                if price:
-                    pnl = (entry_price - price) / entry_price * 100
-                    print(f"🔄 {sym}: entry={entry_price:.4f}, now={price:.4f}, PnL={pnl:.2f}%")
-                    if pnl >= 0.7 or pnl <= -0.7:
-                        print(f"🔔 {sym}: Pozicija uždaroma. PnL: {pnl:.2f}%")
-                        close_position(sym, qty)
-                        del opened[sym]
-        time.sleep(2)
+            # Ieškom naujų signalų
+            if len(opened) < MAX_OPEN_POSITIONS:
+                symbols = fetch_top_symbols(limit=30)
+                print(f"\n[{now.strftime('%H:%M:%S')}] Tikrinamos poros: {symbols}")
+                for sym in symbols:
+                    if sym in opened:
+                        continue
+                    df = get_klines(sym, interval="240")
+                    if df.empty or len(df) < 15:
+                        continue
+                    df['min10'] = df['low'].rolling(10).min()
+                    last = df.iloc[-1]
+                    prev = df.iloc[-2]
+                    drop = (last['close'] - prev['close']) / prev['close'] * 100
+                    breakout = last['close'] < last['min10']
+                    vol_spike = last['volume'] > df['volume'].mean() * 1.5
+                    model = train_ai(df)
+                    ai = ai_decision(df, model)
+                    print(f"{sym}: kritimas={drop:.2f}%, breakout={breakout}, vol_spike={vol_spike}, AI={ai}")
+                    if drop <= -0.4 and breakout and vol_spike and ai:
+                        entry_price = last['close']
+                        stop_price = entry_price * (1 + SL_DEFAULT)
+                        qty, _ = calculate_qty_with_risk(sym, entry_price, stop_price)
+                        if qty > 0:
+                            entry = open_position(sym, qty)
+                            if entry:
+                                opened[sym] = {
+                                    'entry_time': now,
+                                    'qty': qty,
+                                    'entry_price': entry,
+                                    'peak_price': entry,
+                                    'direction': 'short'
+                                }
+                                if len(opened) >= MAX_OPEN_POSITIONS:
+                                    break
+            time.sleep(3600)
+        except Exception as e:
+            print(f"❌ Loop klaida: {e}")
+            time.sleep(10)
 
 if __name__ == "__main__":
-    trading_loop()
+    trading_loop_cycle()
