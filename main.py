@@ -116,10 +116,12 @@ def get_price(symbol):
         return None
 
 def trading_loop():
+    print("🚀 LONG strategija paleista – ieškoma pozicijų...")
     opened = {}
     while True:
         if len(opened) < 3:
             symbols = fetch_top_symbols()
+            print(f"🔎 Tikrinamos poros: {symbols}")
             for sym in symbols:
                 if sym in opened:
                     continue
@@ -130,6 +132,7 @@ def trading_loop():
                 prev_highs = df['close'].rolling(5).max()
                 breakout = last['close'] > prev_highs.iloc[-2]
                 vol_spike = last['volume'] > df['volume'].mean() * 1.5
+                print(f"{sym}: close={last['close']:.4f}, breakout={breakout}, vol_spike={vol_spike}")
                 if breakout and vol_spike:
                     qty = calculate_qty(sym)
                     if qty > 0:
@@ -140,6 +143,7 @@ def trading_loop():
                             threading.Thread(target=trailing_monitor, args=(sym, entry, qty, get_price), daemon=True).start()
                             if len(opened) >= 3:
                                 break
+            print("✅ Ciklas baigtas – laukiam kitos valandos...")
         time.sleep(3600)
 
 if __name__ == "__main__":
