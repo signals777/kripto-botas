@@ -1,14 +1,10 @@
-# ✅ LONG strategija: breakout + volume spike + uptrend + trailing SL
-# Rizika: 5% balanso, x5 svertas, max 3 pozicijos
-
+import os
 import time
+import datetime
 import numpy as np
 import pandas as pd
-import datetime
-import threading
 from pybit.unified_trading import HTTP
 
-# 🔐 BYBIT API
 api_key = "6jW8juUDFLe1ykvL3L"
 api_secret = "3UH1avHKHWWyMCmU26RMxh784TGSA8lurzST"
 
@@ -45,10 +41,12 @@ def fetch_top_symbols(limit=30):
         data = session.get_tickers(category="linear")["result"]["list"]
         df = pd.DataFrame(data)
         df = df[df['symbol'].str.endswith("USDT")]
-        df['price24hPcnt'] = df['price24hPcnt'].astype(float) * 100
-        df = df[df['price24hPcnt'] > 1]  # tik žalios poros
-        df = df.sort_values("turnover24h", ascending=False).head(limit)
-        return df['symbol'].tolist()
+        df['lastPrice'] = df['lastPrice'].astype(float)
+        df['prevPrice24h'] = df['prevPrice24h'].astype(float)
+        df['change'] = df['lastPrice'] - df['prevPrice24h']
+        df['green'] = df['change'] > 0
+        top = df[df['green']].sort_values("change", ascending=False).head(limit)
+        return top['symbol'].tolist()
     except Exception as e:
         print(f"❌ fetch_top_symbols klaida: {e}")
         return []
@@ -60,7 +58,7 @@ def calculate_qty(symbol, risk_percent=5):
         price = next((float(t["lastPrice"]) for t in tickers if t["symbol"] == symbol), None)
         balance = get_balance()
         usdt_amount = balance * risk_percent / 100
-        qty = (usdt_amount * 5) / price
+        qty = (usdt_amount * 5) / price  # x5 leverage
         return round(qty, 3)
     except Exception as e:
         print(f"❌ Qty klaida: {e}")
@@ -86,6 +84,36 @@ def close_long(symbol, qty):
     except Exception as e:
         print(f"❌ LONG uždarymo klaida: {e}")
 
+def trailing_monitor(symbol, entry_price, qty, get_price_fn):
+    peak = entry_price
+    active = False
+    drop_sum = 0
+    while True:
+        price = get_price_fn(symbol)
+        if not price:
+            time.sleep(5)
+            continue
+        change = (price - entry_price) / entry_price * 100
+        if change >= 2 and not active:
+            active = True
+            print(f"🔔 Trailing aktyvuotas: {symbol} @ +2%")
+
+        if active:
+            if price > peak:
+                peak = price
+                drop_sum = 0  # anuliuojam nuostolį, nes naujas pikas
+                print(f"📈 Naujas pikas: {symbol} = {peak:.4f}")
+            else:
+                drop = (peak - price) / peak * 100
+                drop_sum += drop
+                print(f"📉 {symbol}: kritimas nuo piko = {drop:.2f}%, sukaupta = {drop_sum:.2f}%")
+                if drop >= 1.5:
+                    pnl = (price - entry_price) / entry_price * 100
+                    print(f"🔻 SL suveikė: {symbol}, PnL={pnl:.2f}%")
+                    close_long(symbol, qty)
+                    break
+        time.sleep(60)
+
 def get_price(symbol):
     try:
         session = get_session_api()
@@ -95,64 +123,49 @@ def get_price(symbol):
     except:
         return None
 
-def is_uptrend(df):
-    df['MA5'] = df['close'].rolling(window=5).mean()
-    df['MA10'] = df['close'].rolling(window=10).mean()
-    return df['MA5'].iloc[-1] > df['MA10'].iloc[-1]
-
-def trailing_monitor(symbol, entry_price, qty):
-    peak = entry_price
-    active = False
-    while True:
-        price = get_price(symbol)
-        if not price:
-            time.sleep(5)
-            continue
-        change = (price - entry_price) / entry_price * 100
-        if change >= 2 and not active:
-            active = True
-            print(f"🔔 Trailing aktyvuotas: {symbol} @ +2%")
-        if active:
-            if price > peak:
-                peak = price
-            drop = (peak - price) / peak * 100
-            if drop >= 1.5:
-                print(f"🔻 SL suveikė: {symbol}, PnL={(price - entry_price) / entry_price * 100:.2f}%")
-                close_long(symbol, qty)
-                break
-        time.sleep(60)
-
 def trading_loop():
     opened = {}
-    print("🚀 Boto paleidimas...")
     while True:
         if len(opened) < 3:
             symbols = fetch_top_symbols()
-            print(f"🔍 Tikrinamos poros: {symbols}")
+            print(f"🔎 Tikrinamos poros: {symbols}")
             for sym in symbols:
                 if sym in opened:
                     continue
                 df = get_klines(sym)
                 if df.empty or len(df) < 20:
+                    print(f"⚠️ {sym}: per mažai žvakių.")
                     continue
                 last = df.iloc[-1]
-                recent = df.iloc[-4:]
-                green_candles = sum(recent['close'] > recent['open']) >= 3
-                breakout = last['close'] > df['close'].rolling(5).max().iloc[-2]
+                prev_highs = df['close'].rolling(5).max()
+                breakout = last['close'] > prev_highs.iloc[-2]
                 vol_spike = last['volume'] > df['volume'].mean() * 1.5
-                trend_up = is_uptrend(df)
+                green = last['close'] > last['open']
+                trend = df['close'].iloc[-1] > df['close'].iloc[-5]
+                print(f"{sym}: green={green}, breakout={breakout}, vol_spike={vol_spike}, trend={trend}")
 
-                print(f"{sym}: green={green_candles}, breakout={breakout}, vol_spike={vol_spike}, trend={trend_up}")
+                if not green:
+                    print(f"⛔ {sym} atmetama – žvakė raudona (green=False)")
+                    continue
+                if not breakout:
+                    print(f"⛔ {sym} atmetama – breakout=False")
+                    continue
+                if not vol_spike:
+                    print(f"⛔ {sym} atmetama – vol_spike=False")
+                    continue
+                if not trend:
+                    print(f"⛔ {sym} atmetama – trend=False")
+                    continue
 
-                if green_candles and breakout and vol_spike and trend_up:
-                    qty = calculate_qty(sym)
-                    if qty > 0:
-                        entry = open_long(sym, qty)
-                        if entry:
-                            opened[sym] = (entry, qty)
-                            threading.Thread(target=trailing_monitor, args=(sym, entry, qty), daemon=True).start()
-                            if len(opened) >= 3:
-                                break
+                qty = calculate_qty(sym)
+                if qty > 0:
+                    entry = open_long(sym, qty)
+                    if entry:
+                        opened[sym] = (entry, qty)
+                        import threading
+                        threading.Thread(target=trailing_monitor, args=(sym, entry, qty, get_price), daemon=True).start()
+                        if len(opened) >= 3:
+                            break
         time.sleep(3600)
 
 if __name__ == "__main__":
