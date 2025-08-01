@@ -1,8 +1,10 @@
 # ✅ Konservatyvi LONG strategija su breakout + volume spike + trailing SL
 # Rizika: 5% balanso vienai pozicijai, x5 svertas, max 3 pozicijos
 
+import os
 import time
-import threading
+import datetime
+import numpy as np
 import pandas as pd
 from pybit.unified_trading import HTTP
 
@@ -16,43 +18,53 @@ def get_session_api():
 def get_balance():
     try:
         session = get_session_api()
-        data = session.get_wallet_balance(accountType="UNIFIED")
-        wallet = data['result']['list'][0]['coin']
-        usdt = next((c for c in wallet if c['coin'] == 'USDT'), None)
+        wallets = session.get_wallet_balance(accountType="UNIFIED")["result"]["list"][0]["coin"]
+        usdt = next((c for c in wallets if c["coin"] == "USDT"), None)
         if usdt:
-            balance = float(usdt.get('walletBalance', 0))
-            print(f"💰 Rastas USDT balansas: {balance:.2f} USDT")
-            return balance
+            print(f"💰 Rastas USDT balansas: {usdt['walletBalance']} USDT")
+            return float(usdt["walletBalance"])
+        else:
+            print("⚠️ USDT balansas nerastas.")
+            return 0
     except Exception as e:
         print(f"❌ Balanso klaida: {e}")
-    return 0
-
-def get_price(symbol):
-    try:
-        session = get_session_api()
-        data = session.get_tickers(category="linear")
-        price = next((float(i["lastPrice"]) for i in data["result"]["list"] if i["symbol"] == symbol), None)
-        return price
-    except:
-        return None
+        return 0
 
 def get_klines(symbol, interval="240", limit=100):
     try:
         session = get_session_api()
-        k = session.get_kline(category="linear", symbol=symbol, interval=interval, limit=limit)
-        df = pd.DataFrame(k["result"]["list"], columns=['timestamp','open','high','low','close','volume','turnover'])
-        df[['open','high','low','close','volume']] = df[['open','high','low','close','volume']].astype(float)
+        klines = session.get_kline(category="linear", symbol=symbol, interval=interval, limit=limit)
+        df = pd.DataFrame(klines["result"]["list"])
+        df.columns = ['timestamp','open','high','low','close','volume','turnover']
+        df['close'] = df['close'].astype(float)
+        df['open'] = df['open'].astype(float)
+        df['volume'] = df['volume'].astype(float)
         return df
     except Exception as e:
         print(f"❌ Klines klaida {symbol}: {e}")
         return pd.DataFrame()
 
+def fetch_top_symbols(limit=30):
+    try:
+        session = get_session_api()
+        data = session.get_tickers(category="linear")["result"]["list"]
+        df = pd.DataFrame(data)
+        df = df[df['symbol'].str.endswith("USDT")]
+        df['turnover24h'] = df['turnover24h'].astype(float)
+        top = df.sort_values("turnover24h", ascending=False).head(limit)
+        return top['symbol'].tolist()
+    except Exception as e:
+        print(f"❌ fetch_top_symbols klaida: {e}")
+        return []
+
 def calculate_qty(symbol, risk_percent=5):
     try:
-        price = get_price(symbol)
+        session = get_session_api()
+        tickers = session.get_tickers(category="linear")["result"]["list"]
+        price = next((float(t["lastPrice"]) for t in tickers if t["symbol"] == symbol), None)
         balance = get_balance()
         usdt_amount = balance * risk_percent / 100
-        qty = (usdt_amount * 5) / price
+        qty = (usdt_amount * 5) / price  # x5 leverage
         print(f"🧮 {symbol}: kaina={price}, balansas={balance}, kiekis={qty}")
         return round(qty, 3)
     except Exception as e:
@@ -62,7 +74,6 @@ def calculate_qty(symbol, risk_percent=5):
 def open_long(symbol, qty):
     try:
         session = get_session_api()
-        session.set_leverage(category="linear", symbol=symbol, buyLeverage=5, sellLeverage=5)
         order = session.place_order(category="linear", symbol=symbol, side="Buy", orderType="Market", qty=qty)
         entry = float(order["result"]["avgPrice"])
         print(f"🟢 LONG atidarytas: {symbol}, qty={qty}, entry={entry}")
@@ -77,25 +88,37 @@ def close_long(symbol, qty):
         session.place_order(category="linear", symbol=symbol, side="Sell", orderType="Market", qty=qty, reduceOnly=True)
         print(f"🔴 LONG uždarytas: {symbol}, qty={qty}")
     except Exception as e:
-        print(f"❌ Uždarymo klaida: {e}")
+        print(f"❌ LONG uždarymo klaida: {e}")
 
-def progressive_risk_guard(symbol, entry, qty, get_price_fn):
-    peak = entry
-    drawdown = 0
-    active = False
+def get_price(symbol):
+    try:
+        session = get_session_api()
+        tick = session.get_tickers(category="linear")["result"]["list"]
+        price = next((float(t["lastPrice"]) for t in tick if t["symbol"] == symbol), None)
+        return price
+    except:
+        return None
+
+def progressive_risk_guard(symbol, entry_price, qty, get_price_fn):
+    peak = entry_price
+    trail_active = False
     while True:
         price = get_price_fn(symbol)
         if not price:
-            time.sleep(10)
+            time.sleep(5)
             continue
-        if price > peak:
-            peak = price
-            drawdown = 0
-        else:
-            decline = (peak - price) / peak * 100
-            drawdown += decline
-            if drawdown >= 1:
-                print(f"🔻 {symbol} pasiekė -1% nuo piko: uždaroma pozicija (PnL={(price-entry)/entry*100:.2f}%)")
+        change = (price - entry_price) / entry_price * 100
+        if change >= 2 and not trail_active:
+            trail_active = True
+            print(f"🔔 Trailing aktyvuotas: {symbol} @ +2%")
+
+        if trail_active:
+            if price > peak:
+                peak = price
+                print(f"📈 Naujas pikas: {peak:.4f}")
+            drawdown = (peak - price) / peak * 100
+            if drawdown >= 1.5:
+                print(f"🔻 SL suveikė: {symbol}, PnL={(price - entry_price)/entry_price*100:.2f}%")
                 close_long(symbol, qty)
                 break
         time.sleep(60)
@@ -104,62 +127,42 @@ def analyze_symbol(symbol):
     df = get_klines(symbol)
     if df.empty or len(df) < 20:
         print(f"⚠️ {symbol}: per mažai žvakių.")
-        return False, None
-
+        return None
     last = df.iloc[-1]
     prev_highs = df['close'].rolling(5).max()
     breakout = last['close'] > prev_highs.iloc[-2]
     vol_spike = last['volume'] > df['volume'].mean() * 1.2
     green = last['close'] > last['open']
-
     print(f"{symbol}: green={green}, breakout={breakout}, vol_spike={vol_spike}")
-    
     if not green:
         print(f"⛔ {symbol} atmetama – žvakė raudona (green=False)")
-        return False, None
     if not breakout:
         print(f"⛔ {symbol} atmetama – breakout=False")
-        return False, None
     if not vol_spike:
         print(f"⛔ {symbol} atmetama – vol_spike=False")
-        return False, None
-    return True, df
-
-def fetch_symbols(limit=30):
-    try:
-        session = get_session_api()
-        data = session.get_tickers(category="linear")["result"]["list"]
-        df = pd.DataFrame(data)
-        df = df[df["symbol"].str.endswith("USDT")]
-        df["turnover24h"] = df["turnover24h"].astype(float)
-        return df.sort_values("turnover24h", ascending=False).head(limit)["symbol"].tolist()
-    except Exception as e:
-        print(f"❌ fetch_symbols klaida: {e}")
-        return []
+    if green and breakout and vol_spike:
+        return True
+    return False
 
 def trading_loop():
     opened = {}
     while True:
         print("\n🔄 Prasideda porų analizė")
-        if len(opened) < 3:
-            symbols = fetch_symbols()
-            print(f"🟡 Tikrinamos poros: {symbols}")
-            for sym in symbols:
-                if sym in opened:
-                    continue
-                valid, df = analyze_symbol(sym)
-                if not valid:
-                    continue
+        symbols = fetch_top_symbols()
+        print(f"🟡 Tikrinamos poros: {symbols}")
+        for sym in symbols:
+            if sym in opened:
+                continue
+            if analyze_symbol(sym):
                 qty = calculate_qty(sym)
-                if qty <= 0:
-                    print(f"⚠️ {sym} atmetama – nepakanka balanso arba netinkamas kiekis (qty={qty})")
-                    continue
-                entry = open_long(sym, qty)
-                if entry:
-                    opened[sym] = (entry, qty)
-                    threading.Thread(target=progressive_risk_guard, args=(sym, entry, qty, get_price), daemon=True).start()
-                    if len(opened) >= 3:
-                        break
+                if qty > 0:
+                    entry = open_long(sym, qty)
+                    if entry:
+                        opened[sym] = (entry, qty)
+                        import threading
+                        threading.Thread(target=progressive_risk_guard, args=(sym, entry, qty, get_price), daemon=True).start()
+                        if len(opened) >= 3:
+                            break
         time.sleep(3600)
 
 if __name__ == "__main__":
