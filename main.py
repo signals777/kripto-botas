@@ -135,8 +135,13 @@ def analyze_and_trade():
         except Exception as e:
             print(f"❌ Orderio klaida: {e}")
 
-if __name__ == "__main__":
+# Paleidimo ciklas
+def trading_loop():
     while True:
         analyze_and_trade()
         print("\n💤 Miegama 3600 sekundžių...\n")
         time.sleep(3600)
+
+# Paleidžiam iškart
+if __name__ == "__main__":
+    trading_loop()
