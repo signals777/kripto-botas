@@ -20,13 +20,10 @@ SYMBOL_LIMIT = 200
 
 def get_symbols():
     tickers = session.get_tickers(category="linear")["result"]["list"]
-    symbols = [t["symbol"] for t in tickers if t["symbol"].endswith("USDT") and "USDC" not in t["symbol"]]
-    df = pd.DataFrame(tickers)
-    df["priceChangePercent"] = df["price24hPcnt"].astype(float)
-    df = df[df["symbol"].isin(symbols)]
-    top_symbols = df.sort_values("priceChangePercent", ascending=False).head(50)["symbol"].tolist()
-    print(f"\n📈 Atrinkta TOP {len(top_symbols)} porų pagal kainos kilimą")
-    return top_symbols
+    sorted_tickers = sorted(tickers, key=lambda x: float(x["change24h"]), reverse=True)
+    top_50 = [t["symbol"] for t in sorted_tickers if t["symbol"].endswith("USDT") and "USDC" not in t["symbol"]][:50]
+    print(f"\n📈 Atrinkta TOP {len(top_50)} porų pagal kainos kilimą")
+    return top_50
 
 def get_klines(symbol):
     try:
@@ -100,12 +97,11 @@ open_positions = {}
 
 def analyze_and_trade():
     symbols = get_symbols()
-    print(f"\n🔄 Prasideda porų analizė")
-    print(f"🟡 Tikrinamos {len(symbols)} poros")
+    print(f"\n🔄 Prasideda porų analizė\n🟡 Tikrinamos {len(symbols)} poros")
     balance = get_wallet_balance()
     print(f"💰 Balansas: {balance:.2f} USDT")
 
-    matched = 0
+    filtered = 0
     opened = 0
 
     for symbol in symbols:
@@ -130,17 +126,16 @@ def analyze_and_trade():
             print(f"⛔ {symbol} atmetama – vol_spike=False")
             continue
 
-        matched += 1
+        filtered += 1
         price = df["close"].iloc[-1]
         qty = calculate_qty(symbol, price, balance)
-
         if qty == 0:
-            print(f"⚠️ {symbol} atmetama – netinkamas kiekis arba balansas (qty={qty})")
+            print(f"⚠️ {symbol} atmetama – nepakanka balanso arba netinkamas kiekis (qty={qty})")
             continue
 
         try:
             session.set_leverage(category="linear", symbol=symbol, buyLeverage=LEVERAGE, sellLeverage=LEVERAGE)
-            order = session.place_order(category="linear", symbol=symbol, side="Buy", orderType="Market", qty=qty)
+            session.place_order(category="linear", symbol=symbol, side="Buy", orderType="Market", qty=qty)
             print(f"✅ Atidaryta pozicija: {symbol}, kiekis={qty}, kaina={price}")
             open_positions[symbol] = qty
             opened += 1
@@ -148,7 +143,7 @@ def analyze_and_trade():
         except Exception as e:
             print(f"❌ Orderio klaida: {e}")
 
-    print(f"\n📊 Atitiko filtrus: {matched} poros")
+    print(f"\n📊 Atitiko filtrus: {filtered} poros")
     print(f"📥 Atidaryta pozicijų: {opened}")
 
 def trading_loop():
