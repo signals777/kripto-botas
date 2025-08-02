@@ -6,6 +6,7 @@ import numpy as np
 from datetime import datetime
 from pybit.unified_trading import HTTP
 
+# ⛔️ BYBIT API KEY ir SECRET – ĮRAŠYK SAVO
 API_KEY = "6jW8juUDFLe1ykvL3L"
 API_SECRET = "3UH1avHKHWWyMCmU26RMxh784TGSA8lurzST"
 
@@ -18,11 +19,8 @@ SYMBOL_LIMIT = 200
 
 def get_symbols():
     tickers = session.get_tickers(category="linear")["result"]["list"]
-    filtered = [t for t in tickers if t["symbol"].endswith("USDT") and "USDC" not in t["symbol"] and "change24h" in t]
-    sorted_tickers = sorted(filtered, key=lambda x: float(x["change24h"]), reverse=True)
-    symbols = [t["symbol"] for t in sorted_tickers[:50]]
-    print(f"\n📈 Atrinkta TOP {len(symbols)} porų pagal kainos kilimą\n")
-    return symbols
+    valid = [t for t in tickers if t["symbol"].endswith("USDT") and "USDC" not in t["symbol"]]
+    return [t["symbol"] for t in valid if "lastPrice" in t and float(t.get("lastPrice", 0)) > 0]
 
 def get_klines(symbol):
     try:
@@ -35,18 +33,28 @@ def get_klines(symbol):
         return None
 
 def is_breakout(df):
-    last_close = df["close"].iloc[-1]
-    prev_highs = df["high"].iloc[-6:-1]
-    return last_close > prev_highs.max()
+    try:
+        last_close = df["close"].iloc[-1]
+        prev_highs = df["high"].iloc[-6:-1]
+        return last_close > prev_highs.max()
+    except:
+        return False
 
 def volume_spike(df):
-    recent = df["volume"].iloc[-1]
-    average = df["volume"].iloc[-6:-1].mean()
-    return recent > average * 1.05
+    try:
+        recent = df["volume"].iloc[-1]
+        average = df["volume"].iloc[-6:-1].mean()
+        return recent > average * 1.2
+    except:
+        return False
 
-def is_green_candle(df):
-    last = df.iloc[-1]
-    return float(last["close"]) > float(last["open"])
+def strong_last_candle(df):
+    try:
+        prev = df["close"].iloc[-2]
+        last = df["close"].iloc[-1]
+        return (last - prev) / prev > 0.01
+    except:
+        return False
 
 def calculate_qty(symbol, entry_price, balance):
     risk_amount = balance * RISK_PERCENT
@@ -99,47 +107,46 @@ def analyze_and_trade():
     print(f"\n🔄 Prasideda porų analizė\n🟡 Tikrinamos {len(symbols)} poros")
     balance = get_wallet_balance()
     print(f"💰 Balansas: {balance:.2f} USDT")
-
-    matched = 0
+    
+    filtered = 0
     opened = 0
 
     for symbol in symbols:
+        if opened >= 3:
+            break
         df = get_klines(symbol)
         if df is None or len(df) < 10:
             print(f"⛔ {symbol} atmetama – duomenų nepakanka arba klaida")
             continue
 
-        green = is_green_candle(df)
         breakout = is_breakout(df)
-        vol_spike = volume_spike(df)
+        vol = volume_spike(df)
+        candle = strong_last_candle(df)
 
-        print(f"{symbol}: green={green}, breakout={breakout}, vol_spike={vol_spike}")
+        print(f"{symbol}: breakout={breakout}, vol_spike={vol}, strong_candle={candle}")
 
-        if not breakout:
-            print(f"⛔ {symbol} atmetama – breakout=False")
-            continue
-        if not vol_spike:
-            print(f"⛔ {symbol} atmetama – vol_spike=False")
+        if not (breakout or vol or candle):
+            print(f"⛔ {symbol} atmetama – neatitinka nė vienas kriterijus")
             continue
 
-        matched += 1
-
+        filtered += 1
         price = df["close"].iloc[-1]
         qty = calculate_qty(symbol, price, balance)
+
         if qty == 0:
             continue
 
         try:
             session.set_leverage(category="linear", symbol=symbol, buyLeverage=LEVERAGE, sellLeverage=LEVERAGE)
-            order = session.place_order(category="linear", symbol=symbol, side="Buy", orderType="Market", qty=qty)
-            print(f"✅ Atidaryta pozicija: {symbol}, kiekis={qty}, kaina={price}")
+            session.place_order(category="linear", symbol=symbol, side="Buy", orderType="Market", qty=qty)
+            print(f"✅ Pirkinys: {symbol}, kiekis={qty}, kaina={price}")
             open_positions[symbol] = qty
             opened += 1
             progressive_risk_guard(symbol, price)
         except Exception as e:
             print(f"❌ Orderio klaida: {e}")
 
-    print(f"\n📊 Atitiko filtrus: {matched} poros")
+    print(f"\n📊 Atitiko filtrus: {filtered} porų")
     print(f"📥 Atidaryta pozicijų: {opened}")
 
 def trading_loop():
