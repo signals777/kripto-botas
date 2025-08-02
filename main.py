@@ -6,13 +6,11 @@ import numpy as np
 from datetime import datetime
 from pybit.unified_trading import HTTP
 
-# ⛔️ BYBIT API KEY ir SECRET – ĮRAŠYK SAVO
 API_KEY = "6jW8juUDFLe1ykvL3L"
 API_SECRET = "3UH1avHKHWWyMCmU26RMxh784TGSA8lurzST"
 
 session = HTTP(api_key=API_KEY, api_secret=API_SECRET)
 
-# 🔁 Strategijos parametrai
 LEVERAGE = 5
 RISK_PERCENT = 0.05
 SYMBOL_INTERVAL = "4h"
@@ -20,10 +18,11 @@ SYMBOL_LIMIT = 200
 
 def get_symbols():
     tickers = session.get_tickers(category="linear")["result"]["list"]
-    sorted_tickers = sorted(tickers, key=lambda x: float(x["change24h"]), reverse=True)
-    top_50 = [t["symbol"] for t in sorted_tickers if t["symbol"].endswith("USDT") and "USDC" not in t["symbol"]][:50]
-    print(f"\n📈 Atrinkta TOP {len(top_50)} porų pagal kainos kilimą")
-    return top_50
+    filtered = [t for t in tickers if t["symbol"].endswith("USDT") and "USDC" not in t["symbol"] and "change24h" in t]
+    sorted_tickers = sorted(filtered, key=lambda x: float(x["change24h"]), reverse=True)
+    symbols = [t["symbol"] for t in sorted_tickers[:50]]
+    print(f"\n📈 Atrinkta TOP {len(symbols)} porų pagal kainos kilimą\n")
+    return symbols
 
 def get_klines(symbol):
     try:
@@ -43,7 +42,7 @@ def is_breakout(df):
 def volume_spike(df):
     recent = df["volume"].iloc[-1]
     average = df["volume"].iloc[-6:-1].mean()
-    return recent > average * 1.2
+    return recent > average * 1.05
 
 def is_green_candle(df):
     last = df.iloc[-1]
@@ -101,7 +100,7 @@ def analyze_and_trade():
     balance = get_wallet_balance()
     print(f"💰 Balansas: {balance:.2f} USDT")
 
-    filtered = 0
+    matched = 0
     opened = 0
 
     for symbol in symbols:
@@ -114,11 +113,8 @@ def analyze_and_trade():
         breakout = is_breakout(df)
         vol_spike = volume_spike(df)
 
-        print(f"\n{symbol}: green={green}, breakout={breakout}, vol_spike={vol_spike}")
+        print(f"{symbol}: green={green}, breakout={breakout}, vol_spike={vol_spike}")
 
-        if not green:
-            print(f"⛔ {symbol} atmetama – žvakė raudona (green=False)")
-            continue
         if not breakout:
             print(f"⛔ {symbol} atmetama – breakout=False")
             continue
@@ -126,16 +122,16 @@ def analyze_and_trade():
             print(f"⛔ {symbol} atmetama – vol_spike=False")
             continue
 
-        filtered += 1
+        matched += 1
+
         price = df["close"].iloc[-1]
         qty = calculate_qty(symbol, price, balance)
         if qty == 0:
-            print(f"⚠️ {symbol} atmetama – nepakanka balanso arba netinkamas kiekis (qty={qty})")
             continue
 
         try:
             session.set_leverage(category="linear", symbol=symbol, buyLeverage=LEVERAGE, sellLeverage=LEVERAGE)
-            session.place_order(category="linear", symbol=symbol, side="Buy", orderType="Market", qty=qty)
+            order = session.place_order(category="linear", symbol=symbol, side="Buy", orderType="Market", qty=qty)
             print(f"✅ Atidaryta pozicija: {symbol}, kiekis={qty}, kaina={price}")
             open_positions[symbol] = qty
             opened += 1
@@ -143,7 +139,7 @@ def analyze_and_trade():
         except Exception as e:
             print(f"❌ Orderio klaida: {e}")
 
-    print(f"\n📊 Atitiko filtrus: {filtered} poros")
+    print(f"\n📊 Atitiko filtrus: {matched} poros")
     print(f"📥 Atidaryta pozicijų: {opened}")
 
 def trading_loop():
