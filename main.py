@@ -14,13 +14,24 @@ session = HTTP(api_key=API_KEY, api_secret=API_SECRET)
 
 # 🔁 Strategijos parametrai
 LEVERAGE = 5
-RISK_PERCENT = 0.05  # 5% rizika
+RISK_PERCENT = 0.05
 SYMBOL_INTERVAL = "4h"
 SYMBOL_LIMIT = 200
+TOP_N_GAINERS = 50  # Tik top 50 pagal kainos kilimą
 
-def get_symbols():
-    tickers = session.get_tickers(category="linear")["result"]["list"]
-    return [t["symbol"] for t in tickers if t["symbol"].endswith("USDT") and "USDC" not in t["symbol"]]
+def get_symbols_sorted_by_gainers():
+    try:
+        tickers = session.get_tickers(category="linear")["result"]["list"]
+        filtered = [t for t in tickers if t["symbol"].endswith("USDT") and "USDC" not in t["symbol"]]
+        df = pd.DataFrame(filtered)
+        df["priceChangePercent"] = df["price24hPcnt"].astype(float)
+        df = df.sort_values("priceChangePercent", ascending=False)
+        symbols = df["symbol"].head(TOP_N_GAINERS).tolist()
+        print(f"📈 Atrinkta TOP {TOP_N_GAINERS} porų pagal kainos kilimą")
+        return symbols
+    except Exception as e:
+        print(f"❌ Klaida gaunant gainers: {e}")
+        return []
 
 def get_klines(symbol):
     try:
@@ -93,7 +104,7 @@ def progressive_risk_guard(symbol, entry_price):
 open_positions = {}
 
 def analyze_and_trade():
-    symbols = get_symbols()
+    symbols = get_symbols_sorted_by_gainers()
     print(f"\n🔄 Prasideda porų analizė\n🟡 Tikrinamos {len(symbols)} poros")
     balance = get_wallet_balance()
     print(f"💰 Balansas: {balance:.2f} USDT")
@@ -110,7 +121,7 @@ def analyze_and_trade():
         print(f"\n{symbol}: green={green}, breakout={breakout}, vol_spike={vol_spike}")
 
         if not green:
-            print(f"⛔ {symbol} atmetama – žvakė raudona (green=False)")
+            print(f"⛔ {symbol} atmetama – žvakė raudona")
             continue
         if not breakout:
             print(f"⛔ {symbol} atmetama – breakout=False")
@@ -123,25 +134,23 @@ def analyze_and_trade():
         qty = calculate_qty(symbol, price, balance)
 
         if qty == 0:
-            print(f"⚠️ {symbol} atmetama – nepakanka balanso arba netinkamas kiekis (qty={qty})")
+            print(f"⚠️ {symbol} atmetama – netinkamas kiekis arba balansas")
             continue
 
         try:
             session.set_leverage(category="linear", symbol=symbol, buyLeverage=LEVERAGE, sellLeverage=LEVERAGE)
             order = session.place_order(category="linear", symbol=symbol, side="Buy", orderType="Market", qty=qty)
-            print(f"✅ Atidaryta pozicija: {symbol}, kiekis={qty}, kaina={price}")
+            print(f"✅ Atidaryta LONG pozicija: {symbol}, kiekis={qty}, kaina={price}")
             open_positions[symbol] = qty
             progressive_risk_guard(symbol, price)
         except Exception as e:
             print(f"❌ Orderio klaida: {e}")
 
-# Paleidimo ciklas
 def trading_loop():
     while True:
         analyze_and_trade()
         print("\n💤 Miegama 3600 sekundžių...\n")
         time.sleep(3600)
 
-# Paleidžiam iškart
 if __name__ == "__main__":
     trading_loop()
