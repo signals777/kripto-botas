@@ -12,15 +12,33 @@ API_SECRET = "3UH1avHKHWWyMCmU26RMxh784TGSA8lurzST"
 
 session = HTTP(api_key=API_KEY, api_secret=API_SECRET)
 
+# 🔁 Strategijos parametrai
 LEVERAGE = 5
-RISK_PERCENT = 0.05
+RISK_PERCENT = 0.05  # 5% rizika
 SYMBOL_INTERVAL = "4h"
 SYMBOL_LIMIT = 200
+MAX_POSITIONS = 3
+
+open_positions = {}
 
 def get_symbols():
     tickers = session.get_tickers(category="linear")["result"]["list"]
-    valid = [t for t in tickers if t["symbol"].endswith("USDT") and "USDC" not in t["symbol"]]
-    return [t["symbol"] for t in valid if "lastPrice" in t and float(t.get("lastPrice", 0)) > 0]
+    valid = []
+    for t in tickers:
+        if not t["symbol"].endswith("USDT"):
+            continue
+        if "USDC" in t["symbol"]:
+            continue
+        if "change24h" not in t:
+            continue
+        try:
+            change = float(t["change24h"])
+            valid.append((t["symbol"], change))
+        except:
+            continue
+    sorted_pairs = sorted(valid, key=lambda x: x[1], reverse=True)
+    print(f"\n📈 Atrinkta TOP {min(len(sorted_pairs),50)} porų pagal kainos kilimą")
+    return [s[0] for s in sorted_pairs[:50]]
 
 def get_klines(symbol):
     try:
@@ -29,7 +47,7 @@ def get_klines(symbol):
         df = df.astype({"open": float, "high": float, "low": float, "close": float, "volume": float})
         return df
     except Exception as e:
-        print(f"⚠️ Klaida gaunant žvakes {symbol}: {e}")
+        print(f"⛔ {symbol} atmetama – duomenų nepakanka arba klaida")
         return None
 
 def is_breakout(df):
@@ -48,11 +66,10 @@ def volume_spike(df):
     except:
         return False
 
-def strong_last_candle(df):
+def is_green_candle(df):
     try:
-        prev = df["close"].iloc[-2]
-        last = df["close"].iloc[-1]
-        return (last - prev) / prev > 0.01
+        last = df.iloc[-1]
+        return float(last["close"]) > float(last["open"])
     except:
         return False
 
@@ -100,36 +117,34 @@ def progressive_risk_guard(symbol, entry_price):
         except Exception as e:
             print(f"⚠️ Klaida stebint {symbol}: {e}")
 
-open_positions = {}
-
 def analyze_and_trade():
     symbols = get_symbols()
     print(f"\n🔄 Prasideda porų analizė\n🟡 Tikrinamos {len(symbols)} poros")
     balance = get_wallet_balance()
     print(f"💰 Balansas: {balance:.2f} USDT")
-    
-    filtered = 0
+
+    matched = 0
     opened = 0
 
     for symbol in symbols:
-        if opened >= 3:
+        if opened >= MAX_POSITIONS:
             break
+
         df = get_klines(symbol)
         if df is None or len(df) < 10:
-            print(f"⛔ {symbol} atmetama – duomenų nepakanka arba klaida")
             continue
 
+        green = is_green_candle(df)
         breakout = is_breakout(df)
-        vol = volume_spike(df)
-        candle = strong_last_candle(df)
+        vol_spike = volume_spike(df)
 
-        print(f"{symbol}: breakout={breakout}, vol_spike={vol}, strong_candle={candle}")
+        print(f"\n🔍 {symbol}: green={green}, breakout={breakout}, vol_spike={vol_spike}")
 
-        if not (breakout or vol or candle):
-            print(f"⛔ {symbol} atmetama – neatitinka nė vienas kriterijus")
+        if not breakout and not vol_spike:
+            print(f"⛔ {symbol} atmetama – neatitinka breakout ir tūrio kriterijų")
             continue
 
-        filtered += 1
+        matched += 1
         price = df["close"].iloc[-1]
         qty = calculate_qty(symbol, price, balance)
 
@@ -138,15 +153,15 @@ def analyze_and_trade():
 
         try:
             session.set_leverage(category="linear", symbol=symbol, buyLeverage=LEVERAGE, sellLeverage=LEVERAGE)
-            session.place_order(category="linear", symbol=symbol, side="Buy", orderType="Market", qty=qty)
-            print(f"✅ Pirkinys: {symbol}, kiekis={qty}, kaina={price}")
+            order = session.place_order(category="linear", symbol=symbol, side="Buy", orderType="Market", qty=qty)
+            print(f"✅ Atidaryta pozicija: {symbol}, kiekis={qty}, kaina={price}")
             open_positions[symbol] = qty
             opened += 1
             progressive_risk_guard(symbol, price)
         except Exception as e:
-            print(f"❌ Orderio klaida: {e}")
+            print(f"❌ Orderio klaida {symbol}: {e}")
 
-    print(f"\n📊 Atitiko filtrus: {filtered} porų")
+    print(f"\n📊 Atitiko filtrus: {matched} porų")
     print(f"📥 Atidaryta pozicijų: {opened}")
 
 def trading_loop():
