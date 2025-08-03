@@ -34,25 +34,28 @@ def get_symbols():
     log(f"\n📈 Atrinkta {len(filtered)} USDT porų analizei (be change24h filtro)")
     return filtered[:SYMBOL_LIMIT]
 
-def get_klines(symbol):
-    try:
-        klines = session.get_kline(category="linear", symbol=symbol, interval=SYMBOL_INTERVAL, limit=SYMBOL_LIMIT)["result"]["list"]
-        if not klines or len(klines) < 6:
-            log(f"⛔ {symbol} atmetama – per mažai žvakių (gauta {len(klines)})")
-            return None
-        df = pd.DataFrame(klines, columns=["timestamp", "open", "high", "low", "close", "volume", "_", "_"])
-        df = df.astype({"open": float, "high": float, "low": float, "close": float, "volume": float})
-        return df
-    except Exception as e:
-        log(f"⛔ {symbol} atmetama – klaida gaunant žvakes: {e}")
-        return None
+def get_klines_dual_source(symbol):
+    for category in ["linear", "spot"]:
+        try:
+            klines = session.get_kline(category=category, symbol=symbol, interval=SYMBOL_INTERVAL, limit=10)["result"]["list"]
+            if klines and len(klines) >= 3:
+                df = pd.DataFrame(klines, columns=["timestamp", "open", "high", "low", "close", "volume", "_", "_"])
+                df = df.astype({"open": float, "high": float, "low": float, "close": float, "volume": float})
+                return df
+            else:
+                log(f"⛔ {symbol} ({category}) atmetama – per mažai žvakių (gauta {len(klines)})")
+        except Exception as e:
+            log(f"⛔ {symbol} ({category}) atmetama – klaida gaunant žvakes: {e}")
+    return None
 
 def is_breakout(df):
     last_close = df["close"].iloc[-1]
-    prev_highs = df["high"].iloc[-6:-1]
+    prev_highs = df["high"].iloc[-6:-1] if len(df) >= 6 else df["high"].iloc[:-1]
     return last_close > prev_highs.max()
 
 def volume_spike(df):
+    if len(df) < 6:
+        return False
     recent = df["volume"].iloc[-1]
     average = df["volume"].iloc[-6:-1].mean()
     return recent > average * 1.05
@@ -121,7 +124,8 @@ def analyze_and_trade():
     opened_count = 0
 
     for symbol in symbols:
-        df = get_klines(symbol)
+        time.sleep(1)
+        df = get_klines_dual_source(symbol)
         if df is None:
             continue
 
@@ -129,7 +133,7 @@ def analyze_and_trade():
         breakout = is_breakout(df)
         vol_spike = volume_spike(df)
 
-        log(f"\n{symbol}: green={green}, breakout={breakout}, vol_spike={vol_spike}")
+        log(f"{symbol}: green={green}, breakout={breakout}, vol_spike={vol_spike}")
 
         if not (green or breakout or vol_spike):
             log(f"⛔ {symbol} atmetama – neatitinka nė vieno filtro")
@@ -154,7 +158,6 @@ def analyze_and_trade():
                 break
         except Exception as e:
             log(f"❌ Orderio klaida: {e}")
-        time.sleep(1)
 
     log(f"\n📊 Atitiko filtrus: {filtered_count} porų")
     log(f"📥 Atidaryta pozicijų: {opened_count}")
