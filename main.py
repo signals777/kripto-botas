@@ -14,49 +14,52 @@ session = HTTP(api_key=API_KEY, api_secret=API_SECRET)
 LEVERAGE = 5
 RISK_PERCENT = 0.05
 SYMBOL_INTERVAL = "1h"
-SYMBOL_LIMIT = 50
+SYMBOL_LIMIT = 30
 
 def log(msg):
     print(msg)
 
-def get_symbols():
-    tickers = session.get_tickers(category="spot")["result"]["list"]
-    symbols = []
-    for t in tickers:
-        symbol = t["symbol"]
-        if (
-            symbol.endswith("USDT")
-            and "1000" not in symbol
-            and "USDC" not in symbol
-        ):
-            symbols.append(symbol)
-    log(f"\n📈 Atrinkta {len(symbols)} SPOT porų be 24h filtro")
-    return symbols[:SYMBOL_LIMIT]
+def get_top_symbols():
+    try:
+        response = session.get('/v5/market/top-gainers-losers', params={"category": "spot", "type": "gainers"})
+        symbols = response["result"]["list"]
+        filtered = []
+        for item in symbols:
+            symbol = item["symbol"]
+            if (
+                symbol.endswith("USDT")
+                and "1000" not in symbol
+                and "10000" not in symbol
+                and "1000000" not in symbol
+            ):
+                filtered.append(symbol)
+        log(f"\n📈 Atrinkta {len(filtered[:SYMBOL_LIMIT])} SPOT gainer porų")
+        return filtered[:SYMBOL_LIMIT]
+    except Exception as e:
+        log(f"❌ Klaida gaunant TOP poras: {e}")
+        return []
 
-def get_klines(symbol):
+def get_klines_dual(symbol):
     for category in ["spot", "linear"]:
         try:
-            klines = session.get_kline(category=category, symbol=symbol, interval=SYMBOL_INTERVAL, limit=10)["result"]["list"]
-            if klines and len(klines) >= 3:
-                df = pd.DataFrame(klines, columns=["timestamp", "open", "high", "low", "close", "volume", "_", "_"])
-                df = df.astype({"open": float, "high": float, "low": float, "close": float, "volume": float})
-                return df, category
-            else:
+            data = session.get_kline(category=category, symbol=symbol, interval=SYMBOL_INTERVAL, limit=10)
+            klines = data["result"]["list"]
+            if not klines or len(klines) < 3:
                 log(f"⛔ {symbol} ({category}) atmetama – per mažai žvakių (gauta {len(klines)})")
+                continue
+            df = pd.DataFrame(klines, columns=["timestamp", "open", "high", "low", "close", "volume", "_", "_"])
+            df = df.astype({"open": float, "high": float, "low": float, "close": float, "volume": float})
+            return df
         except Exception as e:
             log(f"⛔ {symbol} ({category}) atmetama – klaida gaunant žvakes: {e}")
-    return None, None
+    return None
 
 def is_breakout(df):
-    if len(df) < 6:
-        return False
     last_close = df["close"].iloc[-1]
     prev_highs = df["high"].iloc[-6:-1]
     return last_close > prev_highs.max()
 
 def volume_spike(df):
-    if len(df) < 6:
-        return False
     recent = df["volume"].iloc[-1]
     average = df["volume"].iloc[-6:-1].mean()
     return recent > average * 1.05
@@ -66,13 +69,13 @@ def is_green_candle(df):
     return float(last["close"]) > float(last["open"])
 
 def calculate_qty(symbol, entry_price, balance):
+    risk_amount = balance * RISK_PERCENT
+    loss_per_unit = entry_price * 0.015
+    qty = (risk_amount * LEVERAGE) / loss_per_unit
     try:
         info = session.get_instruments_info(category="linear", symbol=symbol)["result"]["list"][0]
         qty_step = float(info["lotSizeFilter"]["qtyStep"])
         min_qty = float(info["lotSizeFilter"]["minOrderQty"])
-        risk_amount = balance * RISK_PERCENT
-        loss_per_unit = entry_price * 0.015
-        qty = (risk_amount * LEVERAGE) / loss_per_unit
         qty = np.floor(qty / qty_step) * qty_step
         if qty < min_qty:
             log(f"⚠️ {symbol} atmetama – kiekis per mažas: {qty} < {min_qty}")
@@ -115,7 +118,7 @@ def analyze_and_trade():
     log("\n" + "="*50)
     log(f"🕒 Analizės pradžia: {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')} UTC")
 
-    symbols = get_symbols()
+    symbols = get_top_symbols()
     log(f"\n🔄 Prasideda porų analizė\n🟡 Tikrinamos {len(symbols)} poros")
 
     balance = get_wallet_balance()
@@ -126,7 +129,7 @@ def analyze_and_trade():
 
     for symbol in symbols:
         time.sleep(0.5)
-        df, source = get_klines(symbol)
+        df = get_klines_dual(symbol)
         if df is None:
             continue
 
@@ -134,10 +137,10 @@ def analyze_and_trade():
         breakout = is_breakout(df)
         vol_spike = volume_spike(df)
 
-        log(f"{symbol} ({source}): green={green}, breakout={breakout}, vol_spike={vol_spike}")
+        log(f"{symbol}: green={green}, breakout={breakout}, vol_spike={vol_spike}")
 
         if not (green or breakout or vol_spike):
-            log(f"⛔ {symbol} ({source}) atmetama – neatitinka nė vieno filtro")
+            log(f"⛔ {symbol} atmetama – neatitinka nė vieno filtro")
             continue
 
         filtered_count += 1
@@ -145,12 +148,12 @@ def analyze_and_trade():
         qty = calculate_qty(symbol, price, balance)
 
         if qty == 0:
-            log(f"⚠️ {symbol} ({source}) atmetama – nepakanka balanso arba netinkamas kiekis (qty={qty})")
+            log(f"⚠️ {symbol} atmetama – nepakanka balanso arba netinkamas kiekis (qty={qty})")
             continue
 
         try:
             session.set_leverage(category="linear", symbol=symbol, buyLeverage=LEVERAGE, sellLeverage=LEVERAGE)
-            order = session.place_order(category="linear", symbol=symbol, side="Buy", orderType="Market", qty=qty)
+            session.place_order(category="linear", symbol=symbol, side="Buy", orderType="Market", qty=qty)
             log(f"✅ Atidaryta pozicija: {symbol}, kiekis={qty}, kaina={price}")
             open_positions[symbol] = qty
             opened_count += 1
