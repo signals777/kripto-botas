@@ -6,39 +6,33 @@ import numpy as np
 from datetime import datetime
 from pybit.unified_trading import HTTP
 
-# ⛔️ BYBIT API KEY ir SECRET – ĮRAŠYK SAVO
 API_KEY = "6jW8juUDFLe1ykvL3L"
 API_SECRET = "3UH1avHKHWWyMCmU26RMxh784TGSA8lurzST"
-
 session = HTTP(api_key=API_KEY, api_secret=API_SECRET)
 
-# 🔁 Strategijos parametrai
 LEVERAGE = 5
-RISK_PERCENT = 0.05  # 5% rizika
+RISK_PERCENT = 0.05
 SYMBOL_INTERVAL = "4h"
 SYMBOL_LIMIT = 200
-MAX_POSITIONS = 3
-
-open_positions = {}
 
 def get_symbols():
-    tickers = session.get_tickers(category="linear")["result"]["list"]
-    valid = []
-    for t in tickers:
-        if not t["symbol"].endswith("USDT"):
-            continue
-        if "USDC" in t["symbol"]:
-            continue
-        if "change24h" not in t:
-            continue
-        try:
-            change = float(t["change24h"])
-            valid.append((t["symbol"], change))
-        except:
-            continue
-    sorted_pairs = sorted(valid, key=lambda x: x[1], reverse=True)
-    print(f"\n📈 Atrinkta TOP {min(len(sorted_pairs),50)} porų pagal kainos kilimą")
-    return [s[0] for s in sorted_pairs[:50]]
+    try:
+        tickers = session.get_tickers(category="linear")["result"]["list"]
+        valid_tickers = [t for t in tickers if t["symbol"].endswith("USDT") and "USDC" not in t["symbol"]]
+        sorted_tickers = []
+        for t in valid_tickers:
+            try:
+                change = float(t.get("change24h", 0))
+                sorted_tickers.append((t["symbol"], change))
+            except:
+                continue
+        sorted_tickers.sort(key=lambda x: x[1], reverse=True)
+        top_symbols = [s[0] for s in sorted_tickers[:50]]
+        print(f"\n📈 Atrinkta TOP {len(top_symbols)} porų pagal kainos kilimą\n")
+        return top_symbols
+    except Exception as e:
+        print(f"❌ Klaida gaunant simbolius: {e}")
+        return []
 
 def get_klines(symbol):
     try:
@@ -47,31 +41,22 @@ def get_klines(symbol):
         df = df.astype({"open": float, "high": float, "low": float, "close": float, "volume": float})
         return df
     except Exception as e:
-        print(f"⛔ {symbol} atmetama – duomenų nepakanka arba klaida")
+        print(f"⚠️ Klaida gaunant žvakes {symbol}: {e}")
         return None
 
 def is_breakout(df):
-    try:
-        last_close = df["close"].iloc[-1]
-        prev_highs = df["high"].iloc[-6:-1]
-        return last_close > prev_highs.max()
-    except:
-        return False
+    last_close = df["close"].iloc[-1]
+    prev_highs = df["high"].iloc[-6:-1]
+    return last_close > prev_highs.max()
 
 def volume_spike(df):
-    try:
-        recent = df["volume"].iloc[-1]
-        average = df["volume"].iloc[-6:-1].mean()
-        return recent > average * 1.2
-    except:
-        return False
+    recent = df["volume"].iloc[-1]
+    average = df["volume"].iloc[-6:-1].mean()
+    return recent > average * 1.05
 
 def is_green_candle(df):
-    try:
-        last = df.iloc[-1]
-        return float(last["close"]) > float(last["open"])
-    except:
-        return False
+    last = df.iloc[-1]
+    return float(last["close"]) > float(last["open"])
 
 def calculate_qty(symbol, entry_price, balance):
     risk_amount = balance * RISK_PERCENT
@@ -117,34 +102,35 @@ def progressive_risk_guard(symbol, entry_price):
         except Exception as e:
             print(f"⚠️ Klaida stebint {symbol}: {e}")
 
+open_positions = {}
+
 def analyze_and_trade():
     symbols = get_symbols()
     print(f"\n🔄 Prasideda porų analizė\n🟡 Tikrinamos {len(symbols)} poros")
     balance = get_wallet_balance()
     print(f"💰 Balansas: {balance:.2f} USDT")
-
-    matched = 0
-    opened = 0
+    count_ok = 0
+    count_opened = 0
 
     for symbol in symbols:
-        if opened >= MAX_POSITIONS:
+        if count_opened >= 3:
             break
-
         df = get_klines(symbol)
         if df is None or len(df) < 10:
+            print(f"⛔ {symbol} atmetama – duomenų nepakanka arba klaida")
             continue
 
         green = is_green_candle(df)
         breakout = is_breakout(df)
         vol_spike = volume_spike(df)
 
-        print(f"\n🔍 {symbol}: green={green}, breakout={breakout}, vol_spike={vol_spike}")
+        print(f"{symbol}: green={green}, breakout={breakout}, vol_spike={vol_spike}")
 
-        if not breakout and not vol_spike:
-            print(f"⛔ {symbol} atmetama – neatitinka breakout ir tūrio kriterijų")
+        if not (green or breakout or vol_spike):
+            print(f"⛔ {symbol} atmetama – neatitinka nė vieno filtro")
             continue
 
-        matched += 1
+        count_ok += 1
         price = df["close"].iloc[-1]
         qty = calculate_qty(symbol, price, balance)
 
@@ -156,13 +142,13 @@ def analyze_and_trade():
             order = session.place_order(category="linear", symbol=symbol, side="Buy", orderType="Market", qty=qty)
             print(f"✅ Atidaryta pozicija: {symbol}, kiekis={qty}, kaina={price}")
             open_positions[symbol] = qty
-            opened += 1
+            count_opened += 1
             progressive_risk_guard(symbol, price)
         except Exception as e:
-            print(f"❌ Orderio klaida {symbol}: {e}")
+            print(f"❌ Orderio klaida: {e}")
 
-    print(f"\n📊 Atitiko filtrus: {matched} porų")
-    print(f"📥 Atidaryta pozicijų: {opened}")
+    print(f"\n📊 Atitiko filtrus: {count_ok} porų")
+    print(f"📥 Atidaryta pozicijų: {count_opened}\n")
 
 def trading_loop():
     while True:
