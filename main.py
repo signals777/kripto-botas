@@ -13,7 +13,7 @@ session = HTTP(api_key=API_KEY, api_secret=API_SECRET)
 
 LEVERAGE = 5
 RISK_PERCENT = 0.05
-SYMBOL_INTERVAL = "4h"
+SYMBOL_INTERVAL = "1h"
 SYMBOL_LIMIT = 50
 
 def log(msg):
@@ -37,7 +37,7 @@ def get_symbols():
 def get_klines(symbol):
     try:
         klines = session.get_kline(category="linear", symbol=symbol, interval=SYMBOL_INTERVAL, limit=SYMBOL_LIMIT)["result"]["list"]
-        if not klines or len(klines) < 10:
+        if not klines or len(klines) < 6:
             log(f"⛔ {symbol} atmetama – per mažai žvakių (gauta {len(klines)})")
             return None
         df = pd.DataFrame(klines, columns=["timestamp", "open", "high", "low", "close", "volume", "_", "_"])
