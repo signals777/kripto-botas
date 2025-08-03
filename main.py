@@ -30,15 +30,9 @@ def get_symbols():
             and "10000" not in symbol
             and "1000000" not in symbol
         ):
-            change = t.get("change24h")
-            if change is not None:
-                filtered.append((symbol, float(change)))
-            else:
-                log(f"⛔ {symbol} atmetama – nėra change24h")
-    sorted_pairs = sorted(filtered, key=lambda x: x[1], reverse=True)
-    top_symbols = [x[0] for x in sorted_pairs[:SYMBOL_LIMIT]]
-    log(f"\n📈 Atrinkta TOP {len(top_symbols)} porų pagal kainos kilimą")
-    return top_symbols
+            filtered.append(symbol)
+    log(f"\n📈 Atrinkta {len(filtered)} USDT porų analizei (be change24h filtro)")
+    return filtered[:SYMBOL_LIMIT]
 
 def get_klines(symbol):
     try:
@@ -127,7 +121,6 @@ def analyze_and_trade():
     opened_count = 0
 
     for symbol in symbols:
-        time.sleep(0.5)  # sumažina logų kiekį
         df = get_klines(symbol)
         if df is None:
             continue
@@ -136,7 +129,7 @@ def analyze_and_trade():
         breakout = is_breakout(df)
         vol_spike = volume_spike(df)
 
-        log(f"{symbol}: green={green}, breakout={breakout}, vol_spike={vol_spike}")
+        log(f"\n{symbol}: green={green}, breakout={breakout}, vol_spike={vol_spike}")
 
         if not (green or breakout or vol_spike):
             log(f"⛔ {symbol} atmetama – neatitinka nė vieno filtro")
@@ -161,6 +154,7 @@ def analyze_and_trade():
                 break
         except Exception as e:
             log(f"❌ Orderio klaida: {e}")
+        time.sleep(1)
 
     log(f"\n📊 Atitiko filtrus: {filtered_count} porų")
     log(f"📥 Atidaryta pozicijų: {opened_count}")
