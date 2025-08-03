@@ -6,24 +6,20 @@ import numpy as np
 from datetime import datetime
 from pybit.unified_trading import HTTP
 
-# ⛔️ BYBIT API KEY ir SECRET – ĮRAŠYK SAVO
+# BYBIT API KEY
 API_KEY = "6jW8juUDFLe1ykvL3L"
 API_SECRET = "3UH1avHKHWWyMCmU26RMxh784TGSA8lurzST"
 
 session = HTTP(api_key=API_KEY, api_secret=API_SECRET)
 
-# 🔁 Strategijos parametrai
+# Strategijos parametrai
 LEVERAGE = 5
 RISK_PERCENT = 0.05
 SYMBOL_INTERVAL = "4h"
 SYMBOL_LIMIT = 50
 
-log_file = "analysis_log.txt"
-
 def log(msg):
     print(msg)
-    with open(log_file, "a", encoding="utf-8") as f:
-        f.write(msg + "\n")
 
 def get_symbols():
     tickers = session.get_tickers(category="linear")["result"]["list"]
@@ -39,22 +35,24 @@ def get_symbols():
             change = t.get("change24h")
             if change is not None:
                 filtered.append((symbol, float(change)))
+            else:
+                print(f"⛔ {symbol} atmetama – nėra change24h")
     sorted_pairs = sorted(filtered, key=lambda x: x[1], reverse=True)
     top_symbols = [x[0] for x in sorted_pairs[:SYMBOL_LIMIT]]
-    log(f"\n📈 Atrinkta TOP {len(top_symbols)} porų pagal kainos kilimą")
+    print(f"\n📈 Atrinkta TOP {len(top_symbols)} porų pagal kainos kilimą")
     return top_symbols
 
 def get_klines(symbol):
     try:
         klines = session.get_kline(category="linear", symbol=symbol, interval=SYMBOL_INTERVAL, limit=SYMBOL_LIMIT)["result"]["list"]
         if not klines or len(klines) < 10:
-            log(f"⛔ {symbol} atmetama – per mažai žvakių (gauta {len(klines)})")
+            print(f"⛔ {symbol} atmetama – per mažai žvakių (gauta {len(klines)})")
             return None
         df = pd.DataFrame(klines, columns=["timestamp", "open", "high", "low", "close", "volume", "_", "_"])
         df = df.astype({"open": float, "high": float, "low": float, "close": float, "volume": float})
         return df
     except Exception as e:
-        log(f"⛔ {symbol} atmetama – klaida gaunant žvakes: {e}")
+        print(f"⛔ {symbol} atmetama – klaida gaunant žvakes: {e}")
         return None
 
 def is_breakout(df):
@@ -81,11 +79,11 @@ def calculate_qty(symbol, entry_price, balance):
         min_qty = float(info["lotSizeFilter"]["minOrderQty"])
         qty = np.floor(qty / qty_step) * qty_step
         if qty < min_qty:
-            log(f"⚠️ {symbol} atmetama – kiekis per mažas: {qty} < {min_qty}")
+            print(f"⚠️ {symbol} atmetama – kiekis per mažas: {qty} < {min_qty}")
             return 0
         return round(qty, 6)
     except Exception as e:
-        log(f"⚠️ Klaida gaunant kiekio info {symbol}: {e}")
+        print(f"⚠️ Klaida gaunant kiekio info {symbol}: {e}")
         return 0
 
 def get_wallet_balance():
@@ -94,7 +92,7 @@ def get_wallet_balance():
         usdt = next(c for c in balance if c["coin"] == "USDT")
         return float(usdt["walletBalance"])
     except Exception as e:
-        log(f"❌ Klaida gaunant balansą: {e}")
+        print(f"❌ Klaida gaunant balansą: {e}")
         return 0
 
 def progressive_risk_guard(symbol, entry_price):
@@ -106,26 +104,26 @@ def progressive_risk_guard(symbol, entry_price):
             if price > peak:
                 peak = price
             drawdown = (price - peak) / peak
-            log(f"📉 {symbol}: kaina={price}, pikas={peak}, kritimas={drawdown:.4f}")
+            print(f"📉 {symbol}: kaina={price}, pikas={peak}, kritimas={drawdown:.4f}")
             if drawdown <= -0.015:
-                log(f"❌ {symbol}: pasiektas -1.5% nuo piko, pozicija uždaroma")
+                print(f"❌ {symbol}: pasiektas -1.5% nuo piko, pozicija uždaroma")
                 session.place_order(category="linear", symbol=symbol, side="Sell", orderType="Market", qty=open_positions[symbol])
                 del open_positions[symbol]
                 break
         except Exception as e:
-            log(f"⚠️ Klaida stebint {symbol}: {e}")
+            print(f"⚠️ Klaida stebint {symbol}: {e}")
 
 open_positions = {}
 
 def analyze_and_trade():
-    log("\n" + "="*50)
-    log(f"🕒 Analizės pradžia: {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')} UTC")
+    print("\n" + "="*50)
+    print(f"🕒 Analizės pradžia: {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')} UTC")
 
     symbols = get_symbols()
-    log(f"\n🔄 Prasideda porų analizė\n🟡 Tikrinamos {len(symbols)} poros")
+    print(f"\n🔄 Prasideda porų analizė\n🟡 Tikrinamos {len(symbols)} poros")
 
     balance = get_wallet_balance()
-    log(f"💰 Balansas: {balance:.2f} USDT")
+    print(f"💰 Balansas: {balance:.2f} USDT")
 
     filtered_count = 0
     opened_count = 0
@@ -139,10 +137,10 @@ def analyze_and_trade():
         breakout = is_breakout(df)
         vol_spike = volume_spike(df)
 
-        log(f"\n{symbol}: green={green}, breakout={breakout}, vol_spike={vol_spike}")
+        print(f"\n{symbol}: green={green}, breakout={breakout}, vol_spike={vol_spike}")
 
         if not (green or breakout or vol_spike):
-            log(f"⛔ {symbol} atmetama – neatitinka nė vieno filtro")
+            print(f"⛔ {symbol} atmetama – neatitinka nė vieno filtro")
             continue
 
         filtered_count += 1
@@ -150,31 +148,29 @@ def analyze_and_trade():
         qty = calculate_qty(symbol, price, balance)
 
         if qty == 0:
-            log(f"⚠️ {symbol} atmetama – nepakanka balanso arba netinkamas kiekis (qty={qty})")
+            print(f"⚠️ {symbol} atmetama – nepakanka balanso arba netinkamas kiekis (qty={qty})")
             continue
 
         try:
             session.set_leverage(category="linear", symbol=symbol, buyLeverage=LEVERAGE, sellLeverage=LEVERAGE)
             order = session.place_order(category="linear", symbol=symbol, side="Buy", orderType="Market", qty=qty)
-            log(f"✅ Atidaryta pozicija: {symbol}, kiekis={qty}, kaina={price}")
+            print(f"✅ Atidaryta pozicija: {symbol}, kiekis={qty}, kaina={price}")
             open_positions[symbol] = qty
             opened_count += 1
             progressive_risk_guard(symbol, price)
             if opened_count >= 3:
                 break
         except Exception as e:
-            log(f"❌ Orderio klaida: {e}")
+            print(f"❌ Orderio klaida: {e}")
 
-    log(f"\n📊 Atitiko filtrus: {filtered_count} porų")
-    log(f"📥 Atidaryta pozicijų: {opened_count}")
+    print(f"\n📊 Atitiko filtrus: {filtered_count} porų")
+    print(f"📥 Atidaryta pozicijų: {opened_count}")
 
-# Paleidimo ciklas
 def trading_loop():
     while True:
         analyze_and_trade()
-        log("\n💤 Miegama 3600 sekundžių...\n")
+        print("\n💤 Miegama 3600 sekundžių...\n")
         time.sleep(3600)
 
-# Paleidžiam iškart
 if __name__ == "__main__":
     trading_loop()
