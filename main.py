@@ -1,6 +1,4 @@
 import time
-import os
-import requests
 import pandas as pd
 import numpy as np
 from datetime import datetime
@@ -13,15 +11,15 @@ session = HTTP(api_key=API_KEY, api_secret=API_SECRET)
 
 LEVERAGE = 5
 RISK_PERCENT = 0.05
-SYMBOL_INTERVAL = "30"  # 30 minučių žvakės
-SYMBOL_LIMIT = 30       # Tikrinamos 30 porų
+SYMBOL_INTERVAL = "30"  # 30 min žvakės
+SYMBOL_LIMIT = 30
 
 def log(msg):
     print(msg)
 
 def get_top_symbols():
     try:
-        response = session.get("/v5/market/top-gainers-losers", params={"category": "spot", "type": "gainers"})
+        response = session.get_market_leading(category="spot", type="gainers")
         symbols = response["result"]["list"]
         filtered = []
         for item in symbols:
