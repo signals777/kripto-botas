@@ -13,7 +13,7 @@ session = HTTP(api_key=API_KEY, api_secret=API_SECRET)
 
 LEVERAGE = 5
 RISK_PERCENT = 0.05
-SYMBOL_INTERVAL = "1h"
+SYMBOL_INTERVAL = "30m"
 SYMBOL_LIMIT = 30
 
 def log(msg):
@@ -26,12 +26,7 @@ def get_top_symbols():
         filtered = []
         for item in symbols:
             symbol = item["symbol"]
-            if (
-                symbol.endswith("USDT")
-                and "1000" not in symbol
-                and "10000" not in symbol
-                and "1000000" not in symbol
-            ):
+            if symbol.endswith("USDT") and "1000" not in symbol:
                 filtered.append(symbol)
         log(f"\n📈 Atrinkta {len(filtered[:SYMBOL_LIMIT])} SPOT gainer porų")
         return filtered[:SYMBOL_LIMIT]
