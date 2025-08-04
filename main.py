@@ -19,31 +19,32 @@ def log(msg):
 
 def get_top_symbols():
     try:
-        tickers = session.get_tickers(category="spot")["result"]["list"]
+        tickers = session.get_tickers(category="linear")["result"]["list"]
         symbols = []
         for item in tickers:
             symbol = item["symbol"]
             if symbol.endswith("USDT") and "1000" not in symbol and "10000" not in symbol:
                 symbols.append(symbol)
-        log(f"\n📈 Atrinkta {len(symbols[:SYMBOL_LIMIT])} SPOT porų tikrinimui")
+        log(f"\n📈 Atrinkta {len(symbols[:SYMBOL_LIMIT])} FUTURES porų tikrinimui")
         return symbols[:SYMBOL_LIMIT]
     except Exception as e:
         log(f"❌ Klaida gaunant TOP poras: {e}")
         return []
 
-def get_klines_dual(symbol):
-    for category in ["spot", "linear"]:
+def get_klines_progressive(session, symbol: str, interval: str = "60"):
+    for limit in range(15, 2, -1):
         try:
-            data = session.get_kline(category=category, symbol=symbol, interval=SYMBOL_INTERVAL, limit=10)
+            data = session.get_kline(category="linear", symbol=symbol, interval=interval, limit=limit)
             klines = data["result"]["list"]
             if not klines or len(klines) < 3:
-                return None, f"{symbol}: atmetama – per mažai žvakių ({category})"
+                log(f"{symbol}: gauta {len(klines)} žvakių su limit={limit}")
+                continue
             df = pd.DataFrame(klines, columns=["timestamp", "open", "high", "low", "close", "volume", "_", "_"])
             df = df.astype({"open": float, "high": float, "low": float, "close": float, "volume": float})
             return df, None
-        except Exception as e:
-            return None, f"{symbol}: klaida gaunant žvakes ({category}): {e}"
-    return None, f"{symbol}: klaida – nėra žvakių spot ar linear"
+        except Exception:
+            continue
+    return None, f"{symbol}: nepavyko gauti pakankamai žvakių (3–15 bandymų nesėkmingi)"
 
 def is_breakout(df):
     last_close = df["close"].iloc[-1]
@@ -112,13 +113,12 @@ def analyze_and_trade():
     balance = get_wallet_balance()
     log(f"💰 Balansas: {balance:.2f} USDT")
 
-    filtered = []
     opened_count = 0
     reason_counter = {}
 
     for symbol in symbols:
         time.sleep(0.5)
-        df, err = get_klines_dual(symbol)
+        df, err = get_klines_progressive(session, symbol, interval=SYMBOL_INTERVAL)
         if err:
             log(f"⛔ {err}")
             reason_key = err.split(":")[1].strip() if ":" in err else err
