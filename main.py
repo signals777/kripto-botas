@@ -19,20 +19,24 @@ def log(msg):
 
 def get_top_symbols():
     try:
-        response = session.get_market_leading(category="spot", type="gainers")
-        symbols = response["result"]["list"]
+        data = session.get_tickers(category="spot")
+        tickers = data["result"]["list"]
         filtered = []
-        for item in symbols:
-            symbol = item["symbol"]
+        for t in tickers:
+            symbol = t["symbol"]
             if (
                 symbol.endswith("USDT")
                 and "1000" not in symbol
                 and "10000" not in symbol
                 and "1000000" not in symbol
+                and "change24h" in t
             ):
-                filtered.append(symbol)
-        log(f"\n📈 Atrinkta {len(filtered[:SYMBOL_LIMIT])} SPOT gainer porų")
-        return filtered[:SYMBOL_LIMIT]
+                change = float(t["change24h"])
+                filtered.append((symbol, change))
+        top = sorted(filtered, key=lambda x: x[1], reverse=True)
+        top_symbols = [s[0] for s in top[:SYMBOL_LIMIT]]
+        log(f"\n📈 Atrinkta {len(top_symbols)} SPOT gainer porų")
+        return top_symbols
     except Exception as e:
         log(f"❌ Klaida gaunant TOP poras: {e}")
         return []
