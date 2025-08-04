@@ -11,7 +11,7 @@ session = HTTP(api_key=API_KEY, api_secret=API_SECRET)
 
 LEVERAGE = 5
 RISK_PERCENT = 0.05
-SYMBOL_INTERVAL = "30"
+SYMBOL_INTERVAL = "60"
 SYMBOL_LIMIT = 30
 
 def log(msg):
@@ -121,7 +121,8 @@ def analyze_and_trade():
         df, err = get_klines_dual(symbol)
         if err:
             log(f"⛔ {err}")
-            reason_counter[err.split(":")[1].strip()] = reason_counter.get(err.split(":")[1].strip(), 0) + 1
+            reason_key = err.split(":")[1].strip() if ":" in err else err
+            reason_counter[reason_key] = reason_counter.get(reason_key, 0) + 1
             continue
 
         green = is_green_candle(df)
