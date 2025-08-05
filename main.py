@@ -11,7 +11,7 @@ session = HTTP(api_key=API_KEY, api_secret=API_SECRET)
 
 LEVERAGE = 5
 RISK_PERCENT = 0.05
-SYMBOL_INTERVAL = "60"
+SYMBOL_INTERVAL = "30"
 SYMBOL_LIMIT = 30
 
 def log(msg):
@@ -31,7 +31,7 @@ def get_top_symbols():
         log(f"❌ Klaida gaunant TOP poras: {e}")
         return []
 
-def get_klines_progressive(session, symbol: str, interval: str = "60"):
+def get_klines_progressive(session, symbol: str, interval: str = "30"):
     for limit in range(15, 2, -1):
         try:
             data = session.get_kline(category="linear", symbol=symbol, interval=interval, limit=limit)
@@ -131,8 +131,8 @@ def analyze_and_trade():
 
         log(f"{symbol}: green={green}, breakout={breakout}, vol_spike={vol_spike}")
 
-        if not (green or breakout or vol_spike):
-            reason = "neatitinka filtrų"
+        if not vol_spike:
+            reason = "nėra tūrio šuolio"
             log(f"⛔ {symbol} atmetama – {reason}")
             reason_counter[reason] = reason_counter.get(reason, 0) + 1
             continue
