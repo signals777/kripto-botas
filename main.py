@@ -31,34 +31,24 @@ def get_top_symbols():
         log(f"❌ Klaida gaunant TOP poras: {e}")
         return []
 
-def get_klines_progressive(session, symbol: str, interval: str = "30"):
-    for limit in range(15, 2, -1):
-        try:
-            data = session.get_kline(category="linear", symbol=symbol, interval=interval, limit=limit)
-            klines = data["result"]["list"]
-            if not klines or len(klines) < 3:
-                log(f"{symbol}: gauta {len(klines)} žvakių su limit={limit}")
-                continue
-            df = pd.DataFrame(klines, columns=["timestamp", "open", "high", "low", "close", "volume", "_", "_"])
-            df = df.astype({"open": float, "high": float, "low": float, "close": float, "volume": float})
-            return df, None
-        except Exception:
-            continue
-    return None, f"{symbol}: nepavyko gauti pakankamai žvakių (3–15 bandymų nesėkmingi)"
+def get_klines(symbol):
+    try:
+        data = session.get_kline(category="linear", symbol=symbol, interval=SYMBOL_INTERVAL, limit=6)
+        klines = data["result"]["list"]
+        df = pd.DataFrame(klines, columns=["timestamp", "open", "high", "low", "close", "volume", "_", "_"])
+        df = df.astype({"open": float, "high": float, "low": float, "close": float, "volume": float})
+        return df
+    except Exception as e:
+        log(f"⚠️ {symbol}: klaida gaunant žvakes: {e}")
+        return None
 
-def is_breakout(df):
-    last_close = df["close"].iloc[-1]
-    prev_highs = df["high"].iloc[-6:-1]
-    return last_close > prev_highs.max()
-
-def volume_spike(df):
-    recent = df["volume"].iloc[-1]
-    average = df["volume"].iloc[-6:-1].mean()
-    return recent > average * 1.05
-
-def is_green_candle(df):
-    last = df.iloc[-1]
-    return last["close"] > last["open"]
+def calculate_volume_spike(df):
+    try:
+        recent = df["volume"].iloc[-1]
+        average = df["volume"].iloc[-5:-1].mean()
+        return recent / average if average > 0 else 0
+    except:
+        return 0
 
 def calculate_qty(symbol, entry_price, balance):
     risk_amount = balance * RISK_PERCENT
@@ -113,60 +103,47 @@ def analyze_and_trade():
     balance = get_wallet_balance()
     log(f"💰 Balansas: {balance:.2f} USDT")
 
-    opened_count = 0
-    reason_counter = {}
-
+    results = []
     for symbol in symbols:
-        time.sleep(0.5)
-        df, err = get_klines_progressive(session, symbol, interval=SYMBOL_INTERVAL)
-        if err:
-            log(f"⛔ {err}")
-            reason_key = err.split(":")[1].strip() if ":" in err else err
-            reason_counter[reason_key] = reason_counter.get(reason_key, 0) + 1
+        time.sleep(0.3)
+        df = get_klines(symbol)
+        if df is None:
             continue
+        spike = calculate_volume_spike(df)
+        results.append((symbol, spike, df))
 
-        green = is_green_candle(df)
-        breakout = is_breakout(df)
-        vol_spike = volume_spike(df)
+    results.sort(key=lambda x: x[1], reverse=True)
 
-        log(f"{symbol}: green={green}, breakout={breakout}, vol_spike={vol_spike}")
-
-        if not vol_spike:
-            reason = "nėra tūrio šuolio"
-            log(f"⛔ {symbol} atmetama – {reason}")
-            reason_counter[reason] = reason_counter.get(reason, 0) + 1
+    opened = 0
+    for symbol, spike, df in results:
+        log(f"{symbol}: volume spike = {spike:.2f}")
+        if spike <= 1.05:
+            log(f"⛔ {symbol} atmetama – tūrio šuolis per mažas")
             continue
-
         price = df["close"].iloc[-1]
-        qty, qty_err = calculate_qty(symbol, price, balance)
-        if qty_err:
-            log(f"⚠️ {qty_err}")
-            reason_counter["mažas kiekis / netinkamas"] = reason_counter.get("mažas kiekis / netinkamas", 0) + 1
+        qty, err = calculate_qty(symbol, price, balance)
+        if err:
+            log(f"⚠️ {err}")
             continue
-
         try:
             session.set_leverage(category="linear", symbol=symbol, buyLeverage=LEVERAGE, sellLeverage=LEVERAGE)
             session.place_order(category="linear", symbol=symbol, side="Buy", orderType="Market", qty=qty)
             log(f"✅ Atidaryta pozicija: {symbol}, kiekis={qty}, kaina={price}")
             open_positions[symbol] = qty
-            opened_count += 1
+            opened += 1
             progressive_risk_guard(symbol, price)
-            if opened_count >= 3:
+            if opened >= 3:
                 break
         except Exception as e:
             log(f"❌ Orderio klaida: {e}")
-            reason_counter["orderio klaida"] = reason_counter.get("orderio klaida", 0) + 1
 
-    log("\n📊 ANALIZĖS ATASKAITA:")
-    for reason, count in reason_counter.items():
-        log(f"❌ Atmesta dėl „{reason}“: {count} porų")
-    log(f"✅ Iš viso atidaryta pozicijų: {opened_count}")
+    log(f"\n📊 Atidaryta pozicijų: {opened}")
 
 def trading_loop():
     while True:
         analyze_and_trade()
-        log("\n💤 Miegama 3600 sekundžių...\n")
-        time.sleep(3600)
+        log("\n💤 Miegama 1800 sekundžių (30 min)...\n")
+        time.sleep(1800)
 
 if __name__ == "__main__":
     trading_loop()
