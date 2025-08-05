@@ -110,7 +110,7 @@ def analyze_and_trade():
         if df is None:
             continue
         vol_ratio = volume_spike(df)
-        log(f"{symbol}: vol_spike = {vol_ratio:.2f}")
+        log(f"{symbol}: vol_spike={vol_ratio:.2f}")
         if vol_ratio > 1.05:
             results.append((symbol, vol_ratio, df))
 
