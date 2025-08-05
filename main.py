@@ -42,13 +42,28 @@ def get_klines(symbol):
         log(f"⚠️ {symbol}: klaida gaunant žvakes: {e}")
         return None
 
-def calculate_volume_spike(df):
+def is_breakout(df):
+    try:
+        last_close = df["close"].iloc[-1]
+        prev_highs = df["high"].iloc[-6:-1]
+        return last_close > prev_highs.max()
+    except:
+        return False
+
+def volume_spike(df):
     try:
         recent = df["volume"].iloc[-1]
-        average = df["volume"].iloc[-5:-1].mean()
+        average = df["volume"].iloc[-6:-1].mean()
         return recent / average if average > 0 else 0
     except:
         return 0
+
+def is_green_candle(df):
+    try:
+        last = df.iloc[-1]
+        return last["close"] > last["open"]
+    except:
+        return False
 
 def calculate_qty(symbol, entry_price, balance):
     risk_amount = balance * RISK_PERCENT
@@ -105,21 +120,21 @@ def analyze_and_trade():
 
     results = []
     for symbol in symbols:
-        time.sleep(0.3)
+        time.sleep(0.2)
         df = get_klines(symbol)
         if df is None:
             continue
-        spike = calculate_volume_spike(df)
-        results.append((symbol, spike, df))
+        green = is_green_candle(df)
+        breakout = is_breakout(df)
+        vol_ratio = volume_spike(df)
+        log(f"{symbol}: green={green}, breakout={breakout}, vol_spike={vol_ratio:.2f}")
+        if green and breakout and vol_ratio > 1.05:
+            results.append((symbol, vol_ratio, df))
 
     results.sort(key=lambda x: x[1], reverse=True)
 
     opened = 0
-    for symbol, spike, df in results:
-        log(f"{symbol}: volume spike = {spike:.2f}")
-        if spike <= 1.05:
-            log(f"⛔ {symbol} atmetama – tūrio šuolis per mažas")
-            continue
+    for symbol, _, df in results:
         price = df["close"].iloc[-1]
         qty, err = calculate_qty(symbol, price, balance)
         if err:
