@@ -1,5 +1,4 @@
 import time
-import pandas as pd
 import numpy as np
 from datetime import datetime
 from pybit.unified_trading import HTTP
@@ -11,43 +10,39 @@ session = HTTP(api_key=API_KEY, api_secret=API_SECRET)
 
 LEVERAGE = 5
 RISK_PERCENT = 0.05
-SYMBOL_INTERVAL = "30"
 SYMBOL_LIMIT = 30
 
 def log(msg):
     print(msg)
 
-def get_top_symbols():
+def get_top_symbols_by_volume():
     try:
         tickers = session.get_tickers(category="linear")["result"]["list"]
         symbols = []
         for item in tickers:
             symbol = item["symbol"]
-            if symbol.endswith("USDT") and "1000" not in symbol and "10000" not in symbol:
-                symbols.append(symbol)
-        log(f"\n📈 Atrinkta {len(symbols[:SYMBOL_LIMIT])} FUTURES porų tikrinimui")
-        return symbols[:SYMBOL_LIMIT]
+            if (
+                symbol.endswith("USDT")
+                and "1000" not in symbol
+                and "10000" not in symbol
+                and float(item["turnover24h"]) > 1000000
+            ):
+                symbols.append((symbol, float(item["turnover24h"])))
+        symbols.sort(key=lambda x: x[1], reverse=True)
+        top_symbols = [s[0] for s in symbols[:SYMBOL_LIMIT]]
+        log(f"\n📈 Atrinkta {len(top_symbols)} TOP porų pagal 24h tūrį")
+        return top_symbols
     except Exception as e:
-        log(f"❌ Klaida gaunant TOP poras: {e}")
+        log(f"❌ Klaida gaunant TOP poras pagal tūrį: {e}")
         return []
 
-def get_klines(symbol):
+def get_wallet_balance():
     try:
-        data = session.get_kline(category="linear", symbol=symbol, interval=SYMBOL_INTERVAL, limit=6)
-        klines = data["result"]["list"]
-        df = pd.DataFrame(klines, columns=["timestamp", "open", "high", "low", "close", "volume", "_", "_"])
-        df = df.astype({"open": float, "high": float, "low": float, "close": float, "volume": float})
-        return df
+        balance = session.get_wallet_balance(accountType="UNIFIED")["result"]["list"][0]["coin"]
+        usdt = next(c for c in balance if c["coin"] == "USDT")
+        return float(usdt["walletBalance"])
     except Exception as e:
-        log(f"⚠️ {symbol}: klaida gaunant žvakes: {e}")
-        return None
-
-def volume_spike(df):
-    try:
-        recent = df["volume"].iloc[-1]
-        average = df["volume"].iloc[-5:-1].mean()
-        return recent / average if average > 0 else 0
-    except:
+        log(f"❌ Klaida gaunant balansą: {e}")
         return 0
 
 def calculate_qty(symbol, entry_price, balance):
@@ -64,15 +59,6 @@ def calculate_qty(symbol, entry_price, balance):
         return round(qty, 6), None
     except Exception as e:
         return 0, f"{symbol}: klaida gaunant kiekio info: {e}"
-
-def get_wallet_balance():
-    try:
-        balance = session.get_wallet_balance(accountType="UNIFIED")["result"]["list"][0]["coin"]
-        usdt = next(c for c in balance if c["coin"] == "USDT")
-        return float(usdt["walletBalance"])
-    except Exception as e:
-        log(f"❌ Klaida gaunant balansą: {e}")
-        return 0
 
 def progressive_risk_guard(symbol, entry_price):
     peak = entry_price
@@ -98,32 +84,20 @@ def analyze_and_trade():
     log("\n" + "="*60)
     log(f"🕒 Analizės pradžia: {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')} UTC")
 
-    symbols = get_top_symbols()
+    symbols = get_top_symbols_by_volume()
     log(f"\n🔄 Prasideda porų analizė – tikrinamos {len(symbols)} poros")
     balance = get_wallet_balance()
     log(f"💰 Balansas: {balance:.2f} USDT")
 
-    results = []
+    opened = 0
     for symbol in symbols:
         time.sleep(0.2)
-        df = get_klines(symbol)
-        if df is None:
-            continue
-        vol_ratio = volume_spike(df)
-        log(f"{symbol}: vol_spike={vol_ratio:.2f}")
-        if vol_ratio > 1.05:
-            results.append((symbol, vol_ratio, df))
-
-    results.sort(key=lambda x: x[1], reverse=True)
-
-    opened = 0
-    for symbol, _, df in results:
-        price = df["close"].iloc[-1]
-        qty, err = calculate_qty(symbol, price, balance)
-        if err:
-            log(f"⚠️ {err}")
-            continue
         try:
+            price = float(session.get_tickers(category="linear", symbol=symbol)["result"]["list"][0]["lastPrice"])
+            qty, err = calculate_qty(symbol, price, balance)
+            if err:
+                log(f"⚠️ {err}")
+                continue
             session.set_leverage(category="linear", symbol=symbol, buyLeverage=LEVERAGE, sellLeverage=LEVERAGE)
             session.place_order(category="linear", symbol=symbol, side="Buy", orderType="Market", qty=qty)
             log(f"✅ Atidaryta pozicija: {symbol}, kiekis={qty}, kaina={price}")
