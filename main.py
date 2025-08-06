@@ -3,6 +3,7 @@ import numpy as np
 from datetime import datetime
 from pybit.unified_trading import HTTP
 
+# 🛡️ API raktai
 API_KEY = "6jW8juUDFLe1ykvL3L"
 API_SECRET = "3UH1avHKHWWyMCmU26RMxh784TGSA8lurzST"
 
@@ -12,9 +13,12 @@ LEVERAGE = 5
 RISK_PERCENT = 0.05
 SYMBOL_LIMIT = 30
 
+open_positions = {}
+
 def log(msg):
     print(msg)
 
+# 🔍 TOP poros pagal tūrį
 def get_top_symbols_by_volume():
     try:
         tickers = session.get_tickers(category="linear")["result"]["list"]
@@ -36,6 +40,7 @@ def get_top_symbols_by_volume():
         log(f"❌ Klaida gaunant TOP poras pagal tūrį: {e}")
         return []
 
+# 💰 Balanso gavimas
 def get_wallet_balance():
     try:
         balance = session.get_wallet_balance(accountType="UNIFIED")["result"]["list"][0]["coin"]
@@ -45,6 +50,7 @@ def get_wallet_balance():
         log(f"❌ Klaida gaunant balansą: {e}")
         return 0
 
+# 📐 Kiekio skaičiavimas pagal riziką
 def calculate_qty(symbol, entry_price, balance):
     risk_amount = balance * RISK_PERCENT
     loss_per_unit = entry_price * 0.015
@@ -60,6 +66,7 @@ def calculate_qty(symbol, entry_price, balance):
     except Exception as e:
         return 0, f"{symbol}: klaida gaunant kiekio info: {e}"
 
+# ⛔ Trailing Stop logika
 def progressive_risk_guard(symbol, entry_price):
     peak = entry_price
     while True:
@@ -78,8 +85,7 @@ def progressive_risk_guard(symbol, entry_price):
         except Exception as e:
             log(f"⚠️ Klaida stebint {symbol}: {e}")
 
-open_positions = {}
-
+# 🔁 Pagrindinė analizės logika
 def analyze_and_trade():
     log("\n" + "="*60)
     log(f"🕒 Analizės pradžia: {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')} UTC")
@@ -111,6 +117,7 @@ def analyze_and_trade():
 
     log(f"\n📊 Atidaryta pozicijų: {opened}")
 
+# 🔁 Nuolatinė analizė
 def trading_loop():
     while True:
         analyze_and_trade()
