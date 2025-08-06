@@ -104,7 +104,11 @@ def analyze_and_trade():
             if err:
                 log(f"⚠️ {err}")
                 continue
-            session.set_leverage(category="linear", symbol=symbol, buyLeverage=LEVERAGE, sellLeverage=LEVERAGE)
+            try:
+                session.set_leverage(category="linear", symbol=symbol, buyLeverage=LEVERAGE, sellLeverage=LEVERAGE)
+            except Exception as e:
+                log(f"⚠️ Nepavyko nustatyti sverto {symbol}: {e}")
+                continue
             session.place_order(category="linear", symbol=symbol, side="Buy", orderType="Market", qty=qty)
             log(f"✅ Atidaryta pozicija: {symbol}, kiekis={qty}, kaina={price}")
             open_positions[symbol] = qty
